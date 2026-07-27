@@ -1,5 +1,9 @@
 # DDS Email ETL - Agent Guidelines
 
+## Repository
+- **GitHub:** https://github.com/gamalm10/dds-email-etl
+- **Branch:** feat/dds-email-etl
+
 ## Tech Stack
 - Python 3.12+ with FastAPI
 - async SQLAlchemy 2.0 + aiomysql + MariaDB 11
