@@ -1,0 +1,51 @@
+services:
+  dds-api:
+    build: .
+    ports:
+      - "8000:8000"
+    depends_on:
+      dds-db:
+        condition: service_healthy
+      dds-pi:
+        condition: service_started
+    env_file: .env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; exit(0 if urllib.request.urlopen('http://localhost:8000/health').status == 200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  dds-pi:
+    image: node:22-slim
+    working_dir: /app
+    command: sh -c "cd pi && npm install && npx @earendil-works/pi-coding-agent --mode rpc --no-session"
+    env_file: .env
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    volumes:
+      - ./pi:/app/pi
+    restart: unless-stopped
+
+  dds-db:
+    image: mariadb:11
+    env_file: .env
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIA_ROOT_PASSWORD:-rootpass}
+      MARIADB_DATABASE: ${MARIA_DATABASE:-dds}
+      MARIADB_USER: ${MARIA_USER:-dds}
+      MARIADB_PASSWORD: ${MARIA_PASSWORD:-ddspass}
+    ports:
+      - "3307:3306"
+    volumes:
+      - dds_data:/var/lib/mysql
+      - ./migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--su=mysql", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  dds_data:

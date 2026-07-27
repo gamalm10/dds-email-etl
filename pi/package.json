@@ -1,0 +1,7 @@
+{
+  "name": "dds-pi-sidecar",
+  "private": true,
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "latest"
+  }
+}

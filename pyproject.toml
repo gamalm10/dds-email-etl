@@ -1,0 +1,30 @@
+[project]
+name = "dds-email-etl"
+version = "0.1.0"
+description = "DDS Email ETL - supply chain email parsing and BI reporting"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]",
+    "sqlalchemy[asyncio]>=2.0",
+    "aiomysql",
+    "pydantic>=2.0",
+    "pydantic-settings",
+    "python-dotenv",
+    "python-multipart",
+    "aioimaplib",
+    "beautifulsoup4>=4.12",
+    "lxml",
+    "httpx",
+]
+
+[tool.ruff.lint]
+ignore = ["B008", "BLE001"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio",
+    "pytest-cov",
+    "ruff",
+]
