@@ -1,12 +1,13 @@
 import logging
 import math
+import os
 from typing import Optional
 
+from openai import OpenAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.models import Insight, AnomalyLog
-from services.sidecar_manager import SidecarManager
 
 logger = logging.getLogger(__name__)
 
@@ -22,10 +23,26 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
+def _get_embedding(text: str) -> Optional[list[float]]:
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+    if not api_key:
+        logger.warning("OPENAI_API_KEY not set, skipping embedding")
+        return None
+    try:
+        client = OpenAI(api_key=api_key)
+        resp = client.embeddings.create(
+            model="text-embedding-3-small",
+            input=text,
+        )
+        return resp.data[0].embedding
+    except Exception as e:
+        logger.warning(f"Embedding failed: {e}")
+        return None
+
+
 class AnomalyDetector:
-    def __init__(self, db: AsyncSession, sidecar: SidecarManager):
+    def __init__(self, db: AsyncSession):
         self.db = db
-        self.sidecar = sidecar
 
     async def process_insight_embeddings(self, report_id: int) -> list[AnomalyLog]:
         new_insights = (
@@ -41,12 +58,9 @@ class AnomalyDetector:
             return []
 
         for insight in new_insights:
-            try:
-                embedding = await self.sidecar.embed(insight.description)
-                if embedding:
-                    insight.embedding = str(embedding).encode()
-            except Exception as e:
-                logger.warning(f"Embedding failed for insight {insight.id}: {e}")
+            embedding = _get_embedding(insight.description)
+            if embedding:
+                insight.embedding = str(embedding).encode()
 
         await self.db.commit()
 

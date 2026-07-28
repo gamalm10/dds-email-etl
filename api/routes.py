@@ -1,8 +1,9 @@
 import logging
 from datetime import date, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
@@ -92,7 +93,19 @@ async def list_reports(
 
 @router.get("/reports/{report_id}", response_model=ReportOut)
 async def get_report(report_id: int, db: AsyncSession = Depends(get_db)):
-    report = await db.get(Report, report_id)
+    stmt = (
+        select(Report)
+        .where(Report.id == report_id)
+        .options(
+            selectinload(Report.items).selectinload(ReportItem.brand),
+            selectinload(Report.items).selectinload(ReportItem.tasks),
+            selectinload(Report.insights),
+            selectinload(Report.priority_actions),
+            selectinload(Report.thread_summary_rel),
+        )
+    )
+    result = await db.execute(stmt)
+    report = result.scalar_one_or_none()
     if not report:
         raise HTTPException(404, "Report not found")
     return report
@@ -152,6 +165,79 @@ async def reprocess_report(
     proc = Processor(db, sidecar)
     await proc.process_email(raw, report.subject, report.received_at)
     return ProcessResponse(success=True, report_id=report_id, message="Reprocessed successfully")
+
+
+@router.post("/reports/upload", response_model=list[ProcessResponse])
+async def upload_eml(
+    files: list[UploadFile] = File(...),
+    db: AsyncSession = Depends(get_db),
+    sidecar: SidecarManager = Depends(get_sidecar),
+):
+    from services.email_parser import parse_email
+    from services.imap_listener import parse_dds_date
+    from services.processor import Processor
+    from email.utils import parsedate_to_datetime
+
+    if len(files) > 10:
+        raise HTTPException(400, "Max 10 files per request")
+
+    results: list[ProcessResponse] = []
+    for f in files:
+        if not f.filename or not f.filename.lower().endswith(".eml"):
+            results.append(ProcessResponse(success=False, message=f"Invalid file: {f.filename or 'unnamed'}"))
+            continue
+
+        try:
+            raw = await f.read()
+        except Exception as e:
+            results.append(ProcessResponse(success=False, message=f"Read error: {e}"))
+            continue
+
+        parsed = parse_email(raw)
+        report_date = parse_dds_date(parsed.subject)
+
+        proc = Processor(db, sidecar)
+        if report_date:
+            existing_id = await proc.delete_existing(parsed.subject, report_date)
+        else:
+            existing_id = None
+
+        try:
+            received_at = parsedate_to_datetime(parsed.date) if parsed.date else datetime.utcnow()
+        except Exception:
+            received_at = datetime.utcnow()
+
+        try:
+            report = await proc.process_email(raw, parsed.subject, received_at)
+            msg = "Uploaded and processed"
+            if existing_id:
+                msg += " (replaced existing)"
+
+            item_count = len(parsed.rows)
+            task_count = (
+                await db.execute(
+                    select(func.count(Task.id))
+                    .join(ReportItem, Task.report_item_id == ReportItem.id)
+                    .where(ReportItem.report_id == report.id)
+                )
+            ).scalar() or 0
+            insight_count = (
+                await db.execute(
+                    select(func.count(Insight.id)).where(Insight.report_id == report.id)
+                )
+            ).scalar() or 0
+
+            results.append(ProcessResponse(
+                success=True, report_id=report.id, message=msg,
+                items_extracted=item_count,
+                tasks_extracted=task_count,
+                insights_generated=insight_count,
+            ))
+        except Exception as e:
+            logger.error(f"Upload processing failed for {f.filename}: {e}")
+            results.append(ProcessResponse(success=False, message=f"Processing failed: {e}"))
+
+    return results
 
 
 @router.get("/brands", response_model=list[BrandOut])
@@ -250,7 +336,13 @@ async def list_anomalies(
     unreviewed: bool = Query(False),
     db: AsyncSession = Depends(get_db),
 ):
-    stmt = select(AnomalyLog)
+    stmt = (
+        select(AnomalyLog)
+        .options(
+            selectinload(AnomalyLog.source_insight),
+            selectinload(AnomalyLog.matched_insight),
+        )
+    )
     if min_score > 0:
         stmt = stmt.where(AnomalyLog.similarity_score >= min_score)
     if unreviewed:

@@ -36,11 +36,17 @@ class SidecarManager:
         async with self._lock:
             if not self._running or not self._process:
                 return
-            self._process.terminate()
+            try:
+                self._process.terminate()
+            except ProcessLookupError:
+                pass
             try:
                 await asyncio.wait_for(self._process.wait(), timeout=10)
-            except TimeoutError:
-                self._process.kill()
+            except (TimeoutError, ProcessLookupError):
+                try:
+                    self._process.kill()
+                except ProcessLookupError:
+                    pass
             self._running = False
             logger.info("PI SDK sidecar stopped")
 
