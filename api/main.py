@@ -28,9 +28,12 @@ async def lifespan(app: FastAPI):
     set_sidecar(sidecar_manager)
 
     async def on_email(raw: bytes, subject: str, received_at):
-        async with async_session_factory() as db:
-            proc = Processor(db, sidecar_manager)
-            await proc.process_email(raw, subject, received_at)
+        try:
+            async with async_session_factory() as db:
+                proc = Processor(db, sidecar_manager)
+                await proc.process_email(raw, subject, received_at)
+        except Exception as e:
+            logger.error(f"Email processing failed: {e}")
 
     imap_listener = ImapListener(on_email)
     asyncio.create_task(imap_listener.start())

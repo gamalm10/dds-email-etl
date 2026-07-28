@@ -3,7 +3,7 @@ import email
 import logging
 import re
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from email.utils import parsedate_to_datetime
 
 from aioimaplib import IMAP4_SSL
@@ -12,9 +12,34 @@ from config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
-DDS_SUBJECT_PATTERN = re.compile(r"DDS-(\d{2})\.(\d{2})\.(\d{4})")
+DDS_SUBJECT_PATTERN = re.compile(
+    r"(?:DDS-(\d{2})\.(\d{2})\.(\d{4}))|"
+    r"(?:Operation DDS[ -]+(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4}))|"
+    r"(?:DDS[ -]+(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4}))",
+    re.IGNORECASE,
+)
 
 OnEmailCallback = Callable[[bytes, str, datetime], Awaitable[None]]
+
+
+_MONTH_MAP = {
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
+}
+
+
+def parse_dds_date(subject: str) -> date | None:
+    match = DDS_SUBJECT_PATTERN.search(subject)
+    if not match:
+        return None
+    g = match.groups()
+    if g[0] and g[1] and g[2]:
+        return date(int(g[2]), int(g[1]), int(g[0]))
+    if g[3] and g[4] and g[5]:
+        return date(int(g[5]), _MONTH_MAP[g[4].lower()], int(g[3]))
+    if g[6] and g[7] and g[8]:
+        return date(int(g[8]), _MONTH_MAP[g[7].lower()], int(g[6]))
+    return None
 
 
 class ImapListener:
