@@ -6,6 +6,8 @@ import {
   Grid, Paper, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
 } from '@mui/material';
 import { ArrowBack, Refresh } from '@mui/icons-material';
+import api from '@/lib/api';
+import InsightTimeline from '@/components/insights/InsightTimeline';
 
 export default function BrandDetailPage() {
   const params = useParams();
@@ -13,6 +15,7 @@ export default function BrandDetailPage() {
   const [data, setData] = useState<any>(null);
   const [history, setHistory] = useState<any[]>([]);
   const [timeline, setTimeline] = useState<any[]>([]);
+  const [insightTimeline, setInsightTimeline] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState(0);
 
@@ -20,14 +23,16 @@ export default function BrandDetailPage() {
     setLoading(true);
     try {
       const id = params.id as string;
-      const [dRes, hRes, tRes] = await Promise.all([
-        fetch(`/api/v1/brands/${id}/details`).then(r => r.json()),
-        fetch(`/api/v1/brands/${id}/history`).then(r => r.json()),
-        fetch(`/api/v1/brands/${id}/timeline`).then(r => r.json()),
+      const [dRes, hRes, tRes, itRes] = await Promise.all([
+        api.get(`v1/brands/${id}/details`).then(({ data }) => data || {}).catch(() => ({})),
+        api.get(`v1/brands/${id}/history`).then(({ data }) => data || {}).catch(() => ({})),
+        api.get(`v1/brands/${id}/timeline`).then(({ data }) => data || []).catch(() => []),
+        api.get(`v1/brands/${id}/insights/timeline`).then(({ data }) => data || []).catch(() => []),
       ]);
       setData(dRes || {});
       setHistory(Array.isArray(hRes?.history) ? hRes.history : []);
       setTimeline(Array.isArray(tRes) ? tRes : []);
+      setInsightTimeline(Array.isArray(itRes) ? itRes : []);
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
   };
@@ -72,12 +77,13 @@ export default function BrandDetailPage() {
           <Tab label="Timeline" />
           <Tab label="Tasks" />
           <Tab label="Insights" />
+          <Tab label="Insights Timeline" />
         </Tabs>
 
         {tab === 0 && (
           <Box sx={{ p: 2 }}>
             <Grid container spacing={2} mb={3}>
-              <Grid item xs={6} md={3}><Typography variant="caption">Brand</Typography><Typography variant="body2" fontWeight={600}>{brand.brand_category}</Typography></Grid>
+              <Grid item xs={6} md={3}><Typography variant="caption">Brand/Category</Typography><Typography variant="body2" fontWeight={600}>{brand.brand_category}</Typography></Grid>
               <Grid item xs={6} md={3}><Typography variant="caption">Division</Typography><Typography variant="body2">{brand.division}</Typography></Grid>
               <Grid item xs={6} md={3}><Typography variant="caption">Reports</Typography><Typography variant="h6">{data.report_count}</Typography></Grid>
               <Grid item xs={6} md={3}><Typography variant="caption">Open Tasks</Typography><Typography variant="h6">{data.tasks.filter((t:any) => !t.is_resolved).length}</Typography></Grid>
@@ -163,13 +169,13 @@ export default function BrandDetailPage() {
                 </TableHead>
                 <TableBody>
                   {data.tasks.map((t: any) => (
-                    <TableRow key={t.id} hover>
+                    <TableRow key={t.id} hover sx={{ cursor: 'pointer' }} onClick={() => router.push(`/tasks/${t.id}`)}>
                       <TableCell>{t.description}</TableCell>
                       <TableCell>{t.assigned_to || '-'}</TableCell>
                       <TableCell>{t.category || '-'}</TableCell>
                       <TableCell><Chip label={t.priority} size="small" color={t.priority === 'high' ? 'error' : t.priority === 'low' ? 'default' : 'warning'} /></TableCell>
                       <TableCell>{t.deadline || '-'}</TableCell>
-                      <TableCell>{t.is_resolved ? 'Resolved' : 'Open'}</TableCell>
+                      <TableCell>{t.is_resolved ? <Chip label="Done" size="small" color="success" /> : <Chip label="Open" size="small" color="warning" />}</TableCell>
                     </TableRow>
                   ))}
                   {data.tasks.length === 0 && <TableRow><TableCell colSpan={6} align="center">No tasks</TableCell></TableRow>}
@@ -193,6 +199,12 @@ export default function BrandDetailPage() {
               </Card>
             ))}
             {data.insights.length === 0 && <Typography color="text.secondary">No insights</Typography>}
+          </Box>
+        )}
+
+        {tab === 5 && (
+          <Box sx={{ p: 2 }}>
+            <InsightTimeline events={insightTimeline} />
           </Box>
         )}
       </Card>

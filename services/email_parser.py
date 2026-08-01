@@ -142,11 +142,17 @@ def parse_email(raw_bytes: bytes) -> ParsedEmail:
         return parsed
 
     soup = BeautifulSoup(html_body, "html.parser")
-    table = soup.find("table")
-    if not table:
+    tables = soup.find_all("table")
+    main_table = None
+    for t in tables:
+        text = t.get_text(" ", strip=True)
+        if "Division" in text and "Brand" in text:
+            main_table = t
+            break
+    if not main_table:
         return parsed
 
-    rows = table.find_all("tr")
+    rows = main_table.find_all("tr")
     current_division = ""
 
     for tr in rows:
@@ -195,15 +201,58 @@ def parse_email(raw_bytes: bytes) -> ParsedEmail:
 
 def parse_clearance_materials(text: str) -> list[dict]:
     materials = []
-    lines = text.split('\n')
-    for i, line in enumerate(lines):
-        m = re.match(r'([A-Z0-9]{10,})\s+(.+?)\s+([\d,]+)', line.strip())
-        if m:
+    lines = [l.strip() for l in text.split('\n')]
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        code_match = re.match(r'^([A-Z0-9]{10,})$', line)
+        if code_match and not any(kw in line.lower() for kw in ('google', 'microsoft', 'outlook', 'http', 'www.', 'From:', 'Subject:', 'boundary')):
+            material_code = code_match.group(1)
+            category = ""
+            description_ar = ""
+            qty = 0
+            qty_other = 0
+
+            j = i + 1
+            collected = []
+            while j < len(lines) and len(collected) < 5:
+                ln = lines[j]
+                if not ln or ln.startswith('--'):
+                    j += 1
+                    continue
+                if re.match(r'^\d[\d,]*$', ln):
+                    break
+                if re.match(r'^[A-Z]{3,}$', ln) and not collected:
+                    category = ln
+                    collected.append(ln)
+                else:
+                    collected.append(ln)
+                j += 1
+
+            description_ar = " ".join(c for c in collected if c != category)[:300]
+
+            while j < len(lines):
+                ln = lines[j].strip()
+                qm = re.match(r'^([\d,]+)$', ln)
+                if qm:
+                    val = int(qm.group(1).replace(",", ""))
+                    if qty == 0:
+                        qty = val
+                    else:
+                        qty_other = val
+                    j += 1
+                else:
+                    break
+
             materials.append({
-                "material_code": m.group(1),
-                "description": m.group(2).strip()[:200],
-                "quantity": int(m.group(3).replace(",", "")),
+                "material_code": material_code,
+                "description": category,
+                "description_ar": description_ar,
+                "quantity": qty,
+                "quantity_other": qty_other,
+                "category": category,
             })
+        i += 1
     return materials
 
 

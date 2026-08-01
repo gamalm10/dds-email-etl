@@ -97,7 +97,7 @@ class Processor:
             if notified:
                 await self._log(report.id, "notification", "success", f"Sent {len(notified)} alerts")
 
-            text_body_for_extras = (report.raw_html or report.raw_text or "")
+            text_body_for_extras = (parsed.raw_text or parsed.raw_html or "")
             await self._store_enhanced_extractions(report.id, text_body_for_extras)
 
             report.processing_status = ProcessingStatus.completed
@@ -116,17 +116,18 @@ class Processor:
             select(Report.id).where(
                 Report.subject == subject,
                 Report.report_date == report_date,
-            )
+            ).order_by(Report.id.desc()).limit(1)
         )
-        rid = result.scalar_one_or_none()
+        row = result.first()
+        rid = row[0] if row else None
         if not rid:
             return None
 
         await self.db.execute(text("UPDATE dds_insights SET matched_anomaly_id = NULL WHERE matched_anomaly_id IS NOT NULL"))
         await self.db.execute(text("UPDATE dds_tasks SET first_seen_report_id = NULL, last_seen_report_id = NULL, resolved_at_report_id = NULL WHERE first_seen_report_id = :rid OR last_seen_report_id = :rid OR resolved_at_report_id = :rid"), {"rid": rid})
+        for table in ["dds_clearance_materials", "dds_priority_actions", "dds_thread_summaries", "dds_email_images", "dds_signatures", "dds_email_threads", "dds_ordering_rules", "dds_insights", "dds_processing_log", "dds_risk_language", "dds_payment_terms", "dds_negotiations", "dds_lead_times", "dds_percentage_metrics", "dds_status_history"]:
+            await self.db.execute(text(f"DELETE FROM {table} WHERE report_id = :rid"), {"rid": rid})
         await self.db.execute(text("DELETE FROM dds_anomaly_log WHERE source_report_id = :rid OR matched_report_id = :rid"), {"rid": rid})
-        await self.db.execute(text("DELETE FROM dds_insights WHERE report_id = :rid"), {"rid": rid})
-        await self.db.execute(text("DELETE FROM dds_processing_log WHERE report_id = :rid"), {"rid": rid})
         await self.db.execute(text("DELETE FROM dds_report_items WHERE report_id = :rid"), {"rid": rid})
         await self.db.execute(text("DELETE FROM dds_reports WHERE id = :rid"), {"rid": rid})
         await self.db.commit()
@@ -322,7 +323,10 @@ class Processor:
                 report_id=report_id,
                 material_code=m.get("material_code"),
                 description=m.get("description"),
+                description_ar=m.get("description_ar"),
                 quantity=m.get("quantity"),
+                quantity_other=m.get("quantity_other"),
+                brand_id=None,
             ))
 
         rules = parse_ordering_rules(text_body)
@@ -413,6 +417,62 @@ class Processor:
                 status=l.get("status"),
                 raw_text=l.get("raw_text"),
             ))
+
+    async def store_from_parsed(self, parsed_email: ParsedEmail, subject: str, sender: str, received_at: datetime | date) -> Report:
+        report_date = None
+        match = DDS_SUBJECT_PATTERN.search(subject)
+        if match:
+            report_date = date(int(match.group(3)), int(match.group(2)), int(match.group(1)))
+
+        if isinstance(received_at, datetime):
+            default_date = received_at.date()
+            received_dt = received_at
+        else:
+            default_date = received_at
+            received_dt = datetime(received_at.year, received_at.month, received_at.day)
+
+        report = Report(
+            subject=subject,
+            report_date=report_date or default_date,
+            sender=sender,
+            received_at=received_dt,
+            raw_html=parsed_email.raw_html,
+            raw_text=parsed_email.raw_text,
+            processing_status=ProcessingStatus.completed,
+        )
+        self.db.add(report)
+        await self.db.flush()
+
+        for row in parsed_email.rows:
+            brand = await self._get_or_create_brand(row.division, row.brand_category)
+            avail_str = row.availability or "unknown"
+            try:
+                avail = AvailabilityStatus(avail_str)
+            except ValueError:
+                avail = AvailabilityStatus.unknown
+            item = ReportItem(
+                report_id=report.id,
+                brand_id=brand.id,
+                availability_status=avail,
+                milestone=row.milestone,
+                milestone_ar=row.milestone_ar,
+                shipment_bis=row.shipment_bis,
+                comments_actions=row.comments,
+                comments_actions_ar=row.comments_ar,
+                language=row.language,
+            )
+            self.db.add(item)
+
+        await self.db.commit()
+
+        from services.analytics import AnalyticsEngine
+        analytics = AnalyticsEngine(self.db)
+        await analytics.compute_status_history(report.id)
+
+        log = ProcessingLog(report_id=report.id, step="store_parsed", status="success", message=f"Stored {len(parsed_email.rows)} items from chain email")
+        self.db.add(log)
+        await self.db.commit()
+        return report
 
     async def _log(self, report_id: int, step: str, status: str, message: str) -> None:
         log = ProcessingLog(report_id=report_id, step=step, status=status, message=message)

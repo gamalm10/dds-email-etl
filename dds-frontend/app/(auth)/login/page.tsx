@@ -1,6 +1,6 @@
 'use client';
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Box, Card, CardContent, TextField, Button, Typography, Alert, InputAdornment, IconButton,
 } from '@mui/material';
@@ -16,6 +16,8 @@ export default function LoginPage() {
   const [showPwd, setShowPwd] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const searchParams = useSearchParams();
+  const sessionExpired = searchParams.get('expired') === 'true';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -41,6 +43,7 @@ export default function LoginPage() {
             <Typography variant="h5" fontWeight={700}>DDS Email ETL</Typography>
             <Typography variant="body2" color="text.secondary">Supply Chain Intelligence Platform</Typography>
           </Box>
+          {sessionExpired && <Alert severity="warning" sx={{ mb: 2 }}>Your session has expired. Please login again.</Alert>}
           {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
           <Box component="form" onSubmit={handleSubmit}>
             <TextField fullWidth label="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)}

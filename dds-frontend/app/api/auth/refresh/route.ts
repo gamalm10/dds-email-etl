@@ -41,7 +41,11 @@ export async function POST(request: Request) {
       userId: user.id, email: user.email, role: user.role_name, permissions,
     });
 
-    return NextResponse.json({ accessToken: newAccess });
+    const response = NextResponse.json({ accessToken: newAccess });
+    response.cookies.set('access_token', newAccess, {
+      httpOnly: true, secure: false, sameSite: 'lax', maxAge: 3600, path: '/',
+    });
+    return response;
   } catch {
     return NextResponse.json({ error: 'Refresh failed' }, { status: 500 });
   }

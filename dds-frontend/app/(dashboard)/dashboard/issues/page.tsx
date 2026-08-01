@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Box, Typography, Card, CardContent, Chip, CircularProgress } from '@mui/material';
+import api from '@/lib/api';
 
 export default function IssuesPage() {
   const router = useRouter();
@@ -9,7 +10,7 @@ export default function IssuesPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch('/api/v1/dashboard/issues').then(r => r.json()).then(d => setIssues(Array.isArray(d) ? d : [])).finally(() => setLoading(false));
+    api.get('v1/dashboard/issues').then(({ data }) => setIssues(Array.isArray(data) ? data : [])).catch(() => setIssues([])).finally(() => setLoading(false));
   }, []);
 
   const getSeverityColor = (s: string) => {
@@ -31,7 +32,7 @@ export default function IssuesPage() {
               <Box sx={{ flex: 1 }}>
                 <Typography variant="body2" fontWeight={600}>{i.description}</Typography>
                 <Box sx={{ display: 'flex', gap: 1, mt: 0.5 }}>
-                  <Typography variant="caption" sx={{ cursor: 'pointer', color: 'primary.main' }} onClick={(e) => { e.stopPropagation(); router.push(`/brands/${i.brand_id}`); }}>{i.brand_category} / {i.division}</Typography>
+                  <Typography variant="caption" sx={{ cursor: 'pointer', color: 'primary.main' }} onClick={(e) => { e.stopPropagation(); router.push(`/brands/${i.brand_id}`); }}>{i.brand_category}</Typography>
                   <Typography variant="caption" color="text.secondary">Report: {i.report_date}</Typography>
                   {i.risk_score && <Chip label={`Risk: ${i.risk_score}`} size="small" color="error" variant="outlined" />}
                 </Box>

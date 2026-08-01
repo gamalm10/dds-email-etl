@@ -38,9 +38,11 @@ api.interceptors.response.use(
           }
         } catch {
           store.logout();
+          window.location.href = '/login?expired=true';
         }
       } else {
         store.logout();
+        window.location.href = '/login?expired=true';
       }
     }
     return Promise.reject(error);

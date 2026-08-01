@@ -17,7 +17,8 @@ export function middleware(request: NextRequest) {
 
   if (pathname.startsWith('/api/')) {
     const authHeader = request.headers.get('authorization');
-    if (!authHeader?.startsWith('Bearer ') && !publicPaths.some((p) => pathname.startsWith(p))) {
+    const cookieToken = request.cookies.get('access_token')?.value;
+    if (!authHeader?.startsWith('Bearer ') && !cookieToken && !publicPaths.some((p) => pathname.startsWith(p))) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
   }

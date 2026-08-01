@@ -29,7 +29,14 @@ async function proxy(request: NextRequest, path: string[]) {
     'Content-Type': request.headers.get('content-type') || 'application/json',
   };
   const auth = request.headers.get('authorization');
-  if (auth) headers['Authorization'] = auth;
+  if (auth) {
+    headers['Authorization'] = auth;
+  } else {
+    const cookieToken = request.cookies.get('access_token')?.value;
+    if (cookieToken) {
+      headers['Authorization'] = `Bearer ${cookieToken}`;
+    }
+  }
 
   const body = ['POST', 'PUT', 'PATCH'].includes(request.method)
     ? await request.blob()

@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { Box, Typography, Card, TextField, MenuItem, Chip, IconButton } from '@mui/material';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { Refresh } from '@mui/icons-material';
+import api from '@/lib/api';
 
 export default function BrandsPage() {
   const router = useRouter();
@@ -15,8 +16,7 @@ export default function BrandsPage() {
   const fetchBrands = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/v1/dashboard/brands');
-      const data = await res.json();
+      const { data } = await api.get('v1/dashboard/brands');
       setBrands(Array.isArray(data) ? data : []);
     } catch (err) { console.error(err); } finally { setLoading(false); }
   }, []);
@@ -35,7 +35,7 @@ export default function BrandsPage() {
   };
 
   const columns: GridColDef[] = [
-    { field: 'brand_category', headerName: 'Brand', flex: 1, minWidth: 180 },
+    { field: 'brand_category', headerName: 'Brand/Category', flex: 1, minWidth: 180 },
     { field: 'division', headerName: 'Division', width: 120 },
     { field: 'vendor', headerName: 'Vendor', width: 120 },
     { field: 'latest_status', headerName: 'Status', width: 90, renderCell: (p: any) => <Chip label={p.value} size="small" sx={{ bgcolor: getStatusColor(p.value), color: 'white' }} /> },

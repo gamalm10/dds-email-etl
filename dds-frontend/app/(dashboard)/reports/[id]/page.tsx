@@ -6,10 +6,14 @@ import {
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Accordion, AccordionSummary, AccordionDetails,
 } from '@mui/material';
 import {
-  ArrowBack, Refresh, PictureAsPdf, TableChart, ExpandMore,
-  Warning, CheckCircle, Error as ErrorIcon, Schedule, Assignment, Gavel, TrendingUp,
+  ArrowBack, Refresh, PictureAsPdf, TableChart, ExpandMore, Delete, Replay,
+  Warning, CheckCircle, Error as ErrorIcon, Schedule, Assignment, Gavel, TrendingUp, Email,
 } from '@mui/icons-material';
 import api from '@/lib/api';
+import InsightCard from '@/components/insights/InsightCard';
+import ExecutiveSummary from '@/components/reports/ExecutiveSummary';
+import DeltaSection from '@/components/reports/DeltaSection';
+import OriginalEmailModal from '@/components/reports/OriginalEmailModal';
 import { exportReportPDF, exportReportExcel } from '@/lib/export';
 import type { Report, RiskLanguage, PaymentTerm, LeadTime, Negotiation } from '@/types/report';
 
@@ -21,8 +25,26 @@ export default function ReportDetailPage() {
   const [payments, setPayments] = useState<PaymentTerm[]>([]);
   const [leads, setLeads] = useState<LeadTime[]>([]);
   const [negos, setNegos] = useState<Negotiation[]>([]);
+  const [clearance, setClearance] = useState<any[]>([]);
+  const [summaryData, setSummaryData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState(0);
+  const [originalOpen, setOriginalOpen] = useState(false);
+
+  const handleDelete = async () => {
+    if (!confirm(`Delete report #${params.id}? This cannot be undone.`)) return;
+    try { await api.delete(`v1/reports/${params.id}`); router.push('/reports'); }
+    catch (err: any) { alert(`Delete failed: ${err.message || err}`); }
+  };
+
+  const handleReprocess = async () => {
+    setLoading(true);
+    try {
+      await api.post(`v1/reports/${params.id}/reprocess`);
+      fetchReport();
+    } catch (err: any) { alert(`Reprocess failed: ${err.message || err}`); }
+    finally { setLoading(false); }
+  };
 
   const fetchReport = useCallback(async () => {
     setLoading(true);
@@ -40,6 +62,8 @@ export default function ReportDetailPage() {
       setPayments(payRes.data);
       setLeads(leadRes.data);
       setNegos(negoRes.data);
+      api.get(`v1/reports/${id}/clearance-materials`).then(({ data }: {data:any}) => setClearance(Array.isArray(data) ? data : [])).catch(() => setClearance([]));
+      api.get(`v1/reports/${id}/summary`).then(({ data: d }) => setSummaryData(d)).catch(() => {});
     } catch (err) {
       console.error('Failed to load report:', err);
     } finally {
@@ -80,6 +104,9 @@ export default function ReportDetailPage() {
         <Chip label={report.processing_status} color={report.processing_status === 'completed' ? 'success' : 'default'} />
         <IconButton onClick={() => exportReportPDF(report, risks, payments, leads)} title="Export PDF"><PictureAsPdf /></IconButton>
         <IconButton onClick={() => exportReportExcel(report, risks)} title="Export Excel"><TableChart /></IconButton>
+        <IconButton onClick={() => setOriginalOpen(true)} title="View Original Email" sx={{ color: 'info.main' }}><Email /></IconButton>
+        <IconButton onClick={handleReprocess} title="Reprocess" color="primary"><Replay /></IconButton>
+        <IconButton onClick={handleDelete} title="Delete Report" color="error"><Delete /></IconButton>
         <IconButton onClick={fetchReport}><Refresh /></IconButton>
       </Box>
 
@@ -94,6 +121,14 @@ export default function ReportDetailPage() {
         </CardContent>
       </Card>
 
+      {summaryData && (
+        <ExecutiveSummary data={summaryData} onDrilldown={(type) => {
+          if (type === 'tasks') setTab(4);
+        }} />
+      )}
+
+      <DeltaSection reportId={Number(params.id)} />
+
       <Card>
         <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ borderBottom: 1, borderColor: 'divider', px: 2 }}>
           <Tab label="Items" />
@@ -101,6 +136,7 @@ export default function ReportDetailPage() {
           <Tab label="Actions" />
           <Tab label="Timeline & Payments" />
           <Tab label="Additional" />
+          {clearance.length > 0 && <Tab label={`Clearance (${clearance.length})`} />}
         </Tabs>
 
         {/* Tab 1: Items */}
@@ -110,7 +146,7 @@ export default function ReportDetailPage() {
               <Table size="small">
                 <TableHead>
                   <TableRow>
-                    <TableCell>Brand</TableCell>
+                    <TableCell>Brand/Category</TableCell>
                     <TableCell>Status</TableCell>
                     <TableCell>Vendor</TableCell>
                     <TableCell>Milestone</TableCell>
@@ -147,15 +183,7 @@ export default function ReportDetailPage() {
             <Grid container spacing={2} mb={4}>
               {report.insights.map((ins) => (
                 <Grid item xs={12} md={6} key={ins.id}>
-                  <Card variant="outlined" key={ins.id} sx={{ cursor: 'pointer' }} onClick={() => router.push(`/reports/${report.id}`)}>
-                    <CardContent>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                        <Chip label={ins.severity} size="small" sx={{ bgcolor: getSeverityColor(ins.severity || ''), color: 'white' }} />
-                        <Typography variant="caption" color="text.secondary">{ins.insight_type || 'general'}</Typography>
-                      </Box>
-                      <Typography variant="body2">{ins.description}</Typography>
-                    </CardContent>
-                  </Card>
+                  <InsightCard insight={ins} compact />
                 </Grid>
               ))}
             </Grid>
@@ -213,7 +241,7 @@ export default function ReportDetailPage() {
                 </TableHead>
                 <TableBody>
                   {report.priority_actions.map((a) => (
-                    <TableRow key={a.id} hover sx={{ cursor: 'pointer' }}>
+                    <TableRow key={a.id} hover sx={{ cursor: 'pointer' }} onClick={() => router.push(`/actions/${a.id}`)}>
                       <TableCell><Chip label={a.person} size="small" color="primary" variant="outlined" /></TableCell>
                       <TableCell>{a.action}</TableCell>
                       <TableCell>{a.category || '-'}</TableCell>
@@ -338,19 +366,18 @@ export default function ReportDetailPage() {
                     <TableCell>Category</TableCell>
                     <TableCell>Priority</TableCell>
                     <TableCell>Deadline</TableCell>
+                    <TableCell>Status</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {report.items.flatMap((item) => item.tasks).slice(0, 30).map((t) => (
-                    <TableRow key={t.id} hover sx={{ cursor: 'pointer' }} onClick={() => {
-                      const parentItem = report.items.find(i => i.tasks.some(tk => tk.id === t.id));
-                      if (parentItem) router.push(`/brands/${parentItem.brand.id}`);
-                    }}>
+                    <TableRow key={t.id} hover sx={{ cursor: 'pointer' }} onClick={() => router.push(`/tasks/${t.id}`)}>
                       <TableCell>{t.task_description}</TableCell>
                       <TableCell>{t.assigned_to || '-'}</TableCell>
                       <TableCell>{t.task_category || '-'}</TableCell>
                       <TableCell><Chip label={t.priority} size="small" color={t.priority === 'high' ? 'error' : t.priority === 'low' ? 'default' : 'warning'} /></TableCell>
                       <TableCell>{t.deadline || '-'}</TableCell>
+                      <TableCell>{t.is_resolved ? <Chip label="Done" size="small" color="success" /> : <Chip label="Open" size="small" color="warning" />}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -383,7 +410,38 @@ export default function ReportDetailPage() {
             ) : <Typography variant="body2" color="text.secondary">No thread summary available</Typography>}
           </Box>
         )}
+
+        {/* Tab 5: Clearance */}
+        {tab === 5 && clearance.length > 0 && (
+          <Box sx={{ p: 2 }}>
+            <TableContainer component={Paper} variant="outlined">
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Material Code</TableCell>
+                    <TableCell>Category</TableCell>
+                    <TableCell>Arabic Description</TableCell>
+                    <TableCell>Qty</TableCell>
+                    <TableCell>Other Qty</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {clearance.map((c: any) => (
+                    <TableRow key={c.id} hover>
+                      <TableCell><Typography variant="body2" sx={{ fontFamily: 'monospace' }}>{c.material_code}</Typography></TableCell>
+                      <TableCell>{c.description || '-'}</TableCell>
+                      <TableCell>{c.description_ar || '-'}</TableCell>
+                      <TableCell>{c.quantity?.toLocaleString() || '-'}</TableCell>
+                      <TableCell>{c.quantity_other ? c.quantity_other.toLocaleString() : '-'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Box>
+        )}
       </Card>
+      <OriginalEmailModal open={originalOpen} reportId={Number(params.id)} onClose={() => setOriginalOpen(false)} />
     </Box>
   );
 }

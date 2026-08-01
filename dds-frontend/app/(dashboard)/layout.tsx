@@ -6,8 +6,8 @@ import {
   Typography, IconButton, Avatar, Menu, MenuItem, Divider, Badge, Tooltip,
 } from '@mui/material';
 import {
-  Menu as MenuIcon, Dashboard, Assessment, CloudUpload, People, Settings, Logout,
-  LightMode, DarkMode, Notifications, Inventory2,
+  Menu as MenuIcon,   Dashboard, Assessment, CloudUpload, People, Settings, Logout,
+  LightMode, DarkMode, Notifications, Inventory2, TaskAlt, Insights as InsightsIcon, AssignmentTurnedIn,
 } from '@mui/icons-material';
 import { ThemeProvider } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
@@ -22,9 +22,12 @@ const DRAWER_WIDTH = 260;
 
 const navItems = [
   { text: 'Dashboard', icon: <Dashboard />, path: '/' },
-  { text: 'Brands', icon: <Inventory2 />, path: '/brands' },
+  { text: 'Brand/Category', icon: <Inventory2 />, path: '/brands' },
   { text: 'Reports', icon: <Assessment />, path: '/reports' },
+  { text: 'Insights', icon: <InsightsIcon />, path: '/insights' },
+  { text: 'Actions', icon: <AssignmentTurnedIn />, path: '/actions' },
   { text: 'Upload Email', icon: <CloudUpload />, path: '/upload' },
+  { text: 'Tasks', icon: <TaskAlt />, path: '/tasks' },
   { text: 'Notifications', icon: <Notifications />, path: '/notifications' },
   { text: 'Users', icon: <People />, path: '/users', adminOnly: true },
   { text: 'Settings', icon: <Settings />, path: '/settings' },

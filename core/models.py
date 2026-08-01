@@ -249,6 +249,7 @@ class ClearanceMaterial(Base):
     description = Column(Text)
     description_ar = Column(Text)
     quantity = Column(Integer)
+    quantity_other = Column(Integer)
     brand_id = Column(Integer, ForeignKey("dds_brands.id"))
     created_at = Column(DateTime, default=_utcnow)
 

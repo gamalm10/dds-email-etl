@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -107,8 +107,8 @@ async def dashboard_critical(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/tasks")
-async def dashboard_tasks(db: AsyncSession = Depends(get_db)):
-    rows = (await db.execute(
+async def dashboard_tasks(assigned_to: str | None = Query(None), db: AsyncSession = Depends(get_db)):
+    stmt = (
         select(
             Task.id, Task.task_description, Task.assigned_to, Task.deadline,
             Task.task_category, Task.priority, Task.task_status, Task.is_resolved, Task.is_overdue,
@@ -119,9 +119,11 @@ async def dashboard_tasks(db: AsyncSession = Depends(get_db)):
         .join(Brand, ReportItem.brand_id == Brand.id)
         .join(Report, ReportItem.report_id == Report.id)
         .where(Task.is_resolved == False)
-        .order_by(Task.priority.desc(), Task.deadline.asc())
-        .limit(200)
-    )).all()
+    )
+    if assigned_to:
+        stmt = stmt.where(Task.assigned_to.ilike(f"%{assigned_to}%"))
+    stmt = stmt.order_by(Task.priority.desc(), Task.deadline.asc()).limit(200)
+    rows = (await db.execute(stmt)).all()
 
     tasks = []
     for row in rows:

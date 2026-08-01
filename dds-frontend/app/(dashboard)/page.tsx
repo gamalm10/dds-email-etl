@@ -35,7 +35,7 @@ export default function DashboardPage() {
   useEffect(() => { fetchData(); }, []);
 
   const statCards = dashboard ? [
-    { label: 'Total Brands', value: dashboard.total_brands, icon: <Inventory2 />, color: 'primary' },
+    { label: 'Brands', value: dashboard.total_brands, icon: <Inventory2 />, color: 'primary' },
     { label: 'Issues', value: dashboard.brands_with_issues, icon: <Warning />, color: 'error' },
     { label: 'Open Tasks', value: dashboard.open_tasks, icon: <TaskAlt />, color: 'warning' },
     { label: 'Critical Insights', value: dashboard.critical_insights, icon: <AssignmentLate />, color: 'error' },
@@ -61,7 +61,7 @@ export default function DashboardPage() {
             <Card sx={{ cursor: 'pointer', transition: 'transform 0.2s', '&:hover': { transform: 'scale(1.02)' } }}
               onClick={() => {
                 if (card.label === 'Issues') router.push('/dashboard/issues');
-                else if (card.label === 'Open Tasks') router.push('/dashboard/tasks');
+                else if (card.label === 'Open Tasks') router.push('/tasks');
                 else if (card.label === 'Critical Insights') router.push('/dashboard/critical');
               }}>
               <CardContent sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 3 }}>

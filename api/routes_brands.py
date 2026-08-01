@@ -131,3 +131,27 @@ async def brand_details(brand_id: int, db: AsyncSession = Depends(get_db)):
         "insights": [{"id": i.id, "type": i.insight_type, "severity": i.severity, "description": i.description, "impact": i.impact} for i in insights],
         "payments": [{"id": p.id, "method": p.payment_method, "deposit_pct": float(p.deposit_pct) if p.deposit_pct else None, "balance_pct": float(p.balance_pct) if p.balance_pct else None} for p in payments],
     }
+
+
+@router.get("/{brand_id}/insights/timeline")
+async def brand_insights_timeline(brand_id: int, db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(
+        select(
+            Insight.id, Insight.insight_type, Insight.description, Insight.severity,
+            Insight.impact, Insight.recommendation, Insight.risk_tags,
+            Insight.report_id, Report.report_date, Report.subject,
+        )
+        .join(Report, Insight.report_id == Report.id)
+        .where(Insight.brand_id == brand_id)
+        .order_by(Report.report_date.desc())
+    )).all()
+
+    timeline = []
+    for r in rows:
+        timeline.append({
+            "id": r[0], "type": r[1], "description": r[2], "severity": r[3],
+            "impact": r[4], "recommendation": r[5], "risk_tags": r[6],
+            "report_id": r[7], "report_date": r[8].isoformat() if r[8] else None,
+            "subject": r[9],
+        })
+    return timeline

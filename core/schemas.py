@@ -36,6 +36,12 @@ class InsightOut(BaseModel):
     description_ar: str | None = None
     severity: str | None = None
     anomaly_score: float | None = None
+    brand_id: int | None = None
+    brand_name: str | None = None
+    report_date: str | None = None
+    impact: str | None = None
+    recommendation: str | None = None
+    risk_tags: str | None = None
 
     class Config:
         from_attributes = True
@@ -145,6 +151,7 @@ class ClearanceMaterialOut(BaseModel):
     description: str | None = None
     description_ar: str | None = None
     quantity: int | None = None
+    quantity_other: int | None = None
 
     class Config:
         from_attributes = True
