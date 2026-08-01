@@ -1,14 +1,14 @@
 'use client';
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
-  Box, Card, CardContent, TextField, Button, Typography, Alert, InputAdornment, IconButton,
+  Box, Card, CardContent, TextField, Button, Typography, Alert, InputAdornment, IconButton, CircularProgress,
 } from '@mui/material';
 import { Email, Lock, Visibility, VisibilityOff, DarkModeRounded } from '@mui/icons-material';
 import { useAuthStore } from '@/stores/authStore';
 import api from '@/lib/api';
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
   const login = useAuthStore((s) => s.login);
   const [email, setEmail] = useState('');
@@ -67,5 +67,13 @@ export default function LoginPage() {
         </CardContent>
       </Card>
     </Box>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<Box sx={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><CircularProgress /></Box>}>
+      <LoginForm />
+    </Suspense>
   );
 }

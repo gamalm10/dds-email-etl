@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -8,7 +8,7 @@ import {
 } from '@mui/material';
 import { Lock } from '@mui/icons-material';
 
-export default function ResetPasswordPage() {
+function ResetPasswordForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const email = searchParams.get('email') || '';
@@ -90,5 +90,13 @@ export default function ResetPasswordPage() {
         <Box sx={{ textAlign: 'center' }}><Link href="/login"><Typography variant="body2" color="primary">Back to Login</Typography></Link></Box>
       </Paper>
     </Box>
+  );
+}
+
+export default function ResetPasswordPage() {
+  return (
+    <Suspense fallback={<Box sx={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><CircularProgress /></Box>}>
+      <ResetPasswordForm />
+    </Suspense>
   );
 }

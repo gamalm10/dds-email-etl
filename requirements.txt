@@ -10,6 +10,10 @@ aioimaplib
 beautifulsoup4>=4.12
 lxml
 httpx
+bcrypt
+PyJWT
+email-validator
+openai
 pytest>=8.0
 pytest-asyncio
 pytest-cov

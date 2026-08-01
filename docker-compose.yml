@@ -6,8 +6,6 @@ services:
     depends_on:
       dds-db:
         condition: service_healthy
-      dds-pi:
-        condition: service_started
     env_file: .env
     restart: unless-stopped
     healthcheck:
@@ -15,17 +13,6 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-
-  dds-pi:
-    image: node:22-slim
-    working_dir: /app
-    command: sh -c "cd pi && npm install && npx @earendil-works/pi-coding-agent --mode rpc --no-session"
-    env_file: .env
-    environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-    volumes:
-      - ./pi:/app/pi
-    restart: unless-stopped
 
   dds-db:
     image: mariadb:11
@@ -45,6 +32,20 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
+
+  dds-frontend:
+    build: ./dds-frontend
+    ports:
+      - "3000:3000"
+    env_file: .env
+    environment:
+      - NEXT_PUBLIC_API_URL=http://dds-api:8000
+      - MARIA_HOST=dds-db
+      - MARIA_PORT=3306
+    depends_on:
+      dds-api:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
