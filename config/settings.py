@@ -17,12 +17,13 @@ class Settings(BaseSettings):
     pi_sidecar_cmd: str = "npx @earendil-works/pi-coding-agent --mode rpc --no-session"
     pi_timeout_seconds: int = 120
 
-    smtp_host: str = "smtp.example.com"
-    smtp_port: int = 587
-    smtp_user: str = ""
-    smtp_password: str = ""
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 465
+    smtp_user: str = "gamal.abdelmoety@a-part.com"
+    smtp_password: str = "guzn zcne wkyg jcnl"
     notify_recipients: str = ""
     notify_rate_limit_hours: int = 24
+    jwt_secret: str = "dds-jwt-secret-change-in-production"
 
     @property
     def maria_dsn(self) -> str:

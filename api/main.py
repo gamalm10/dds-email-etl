@@ -6,6 +6,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes import router, set_sidecar
+from api.routes_auth_reset import router as auth_reset_router
+from api.routes_brands import router as brands_router
+from api.routes_dashboard import router as dashboard_router
 from config.logging import setup_logging
 from core.database import async_session_factory, engine
 from services.imap_listener import ImapListener
@@ -60,6 +63,9 @@ app.add_middleware(
 )
 
 app.include_router(router)
+app.include_router(auth_reset_router)
+app.include_router(brands_router)
+app.include_router(dashboard_router)
 
 
 @app.get("/health")

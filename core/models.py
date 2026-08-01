@@ -69,6 +69,8 @@ class Report(Base):
     raw_text = Column(LONGTEXT)
     processing_status = Column(Enum(ProcessingStatus), default=ProcessingStatus.pending)
     error_message = Column(Text)
+    risk_score = Column(Integer, default=0)
+    risk_category = Column(String(50))
     created_at = Column(DateTime, default=_utcnow)
 
     items = relationship("ReportItem", back_populates="report", cascade="all, delete-orphan")
@@ -236,3 +238,193 @@ class ThreadSummary(Base):
     created_at = Column(DateTime, default=_utcnow)
 
     report = relationship("Report")
+
+
+class ClearanceMaterial(Base):
+    __tablename__ = "dds_clearance_materials"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    report_id = Column(Integer, ForeignKey("dds_reports.id"), nullable=False)
+    material_code = Column(String(100))
+    description = Column(Text)
+    description_ar = Column(Text)
+    quantity = Column(Integer)
+    brand_id = Column(Integer, ForeignKey("dds_brands.id"))
+    created_at = Column(DateTime, default=_utcnow)
+
+    report = relationship("Report")
+    brand = relationship("Brand")
+
+
+class OrderingRule(Base):
+    __tablename__ = "dds_ordering_rules"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    report_id = Column(Integer, ForeignKey("dds_reports.id"), nullable=False)
+    max_amount_usd = Column(DECIMAL(12, 2))
+    max_amount_eur = Column(DECIMAL(12, 2))
+    margin_percent = Column(DECIMAL(5, 2))
+    sales_months = Column(Integer)
+    requires_approval = Column(Boolean, default=True)
+    rule_text = Column(Text)
+    created_at = Column(DateTime, default=_utcnow)
+
+    report = relationship("Report")
+
+
+class EmailThread(Base):
+    __tablename__ = "dds_email_threads"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    report_id = Column(Integer, ForeignKey("dds_reports.id"), nullable=False)
+    message_id = Column(String(255))
+    thread_index = Column(Integer)
+    subject = Column(String(255))
+    sender = Column(String(255))
+    sent_at = Column(DateTime)
+    depth = Column(Integer, default=0)
+    parent_id = Column(Integer, ForeignKey("dds_email_threads.id"))
+    is_dds_email = Column(Boolean, default=False)
+    brand_count = Column(Integer, default=0)
+    has_table = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=_utcnow)
+
+    report = relationship("Report")
+    parent = relationship("EmailThread", remote_side=[id])
+
+
+class Signature(Base):
+    __tablename__ = "dds_signatures"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    report_id = Column(Integer, ForeignKey("dds_reports.id"), nullable=False)
+    sender_email = Column(String(255))
+    person_name = Column(String(255))
+    title = Column(String(255))
+    company = Column(String(255))
+    phone = Column(String(100))
+    email = Column(String(255))
+    address = Column(Text)
+    raw_text = Column(Text)
+    created_at = Column(DateTime, default=_utcnow)
+
+    report = relationship("Report")
+
+
+class EmailImage(Base):
+    __tablename__ = "dds_email_images"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    report_id = Column(Integer, ForeignKey("dds_reports.id"), nullable=False)
+    content_id = Column(String(255))
+    content_type = Column(String(100))
+    size_bytes = Column(Integer)
+    filename = Column(String(255))
+    created_at = Column(DateTime, default=_utcnow)
+
+    report = relationship("Report")
+
+
+class PercentageMetric(Base):
+    __tablename__ = "dds_percentage_metrics"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    report_id = Column(Integer, ForeignKey("dds_reports.id"), nullable=False)
+    brand_id = Column(Integer, ForeignKey("dds_brands.id"))
+    metric_type = Column(String(50))
+    value = Column(DECIMAL(10, 2))
+    context = Column(Text)
+    raw_text = Column(String(255))
+    created_at = Column(DateTime, default=_utcnow)
+
+    report = relationship("Report")
+    brand = relationship("Brand")
+
+
+class RiskLanguage(Base):
+    __tablename__ = "dds_risk_language"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    report_id = Column(Integer, ForeignKey("dds_reports.id"), nullable=False)
+    brand_id = Column(Integer, ForeignKey("dds_brands.id"))
+    phrase = Column(String(255))
+    category = Column(String(50))
+    severity_score = Column(Integer, default=0)
+    context = Column(Text)
+    raw_text = Column(Text)
+    created_at = Column(DateTime, default=_utcnow)
+
+    report = relationship("Report")
+    brand = relationship("Brand")
+
+
+class PaymentTerm(Base):
+    __tablename__ = "dds_payment_terms"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    report_id = Column(Integer, ForeignKey("dds_reports.id"), nullable=False)
+    brand_id = Column(Integer, ForeignKey("dds_brands.id"))
+    payment_method = Column(String(100))
+    deposit_pct = Column(DECIMAL(5, 2))
+    balance_pct = Column(DECIMAL(5, 2))
+    expected_date = Column(Date)
+    raw_text = Column(Text)
+    created_at = Column(DateTime, default=_utcnow)
+
+    report = relationship("Report")
+    brand = relationship("Brand")
+
+
+class Negotiation(Base):
+    __tablename__ = "dds_negotiations"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    report_id = Column(Integer, ForeignKey("dds_reports.id"), nullable=False)
+    brand_id = Column(Integer, ForeignKey("dds_brands.id"))
+    type = Column(String(50))
+    percentage = Column(DECIMAL(5, 2))
+    status = Column(String(50), default="proposed")
+    context = Column(Text)
+    raw_text = Column(Text)
+    created_at = Column(DateTime, default=_utcnow)
+
+    report = relationship("Report")
+    brand = relationship("Brand")
+
+
+class LeadTime(Base):
+    __tablename__ = "dds_lead_times"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    report_id = Column(Integer, ForeignKey("dds_reports.id"), nullable=False)
+    brand_id = Column(Integer, ForeignKey("dds_brands.id"))
+    days = Column(Integer)
+    reference_date = Column(Date)
+    status = Column(String(50))
+    context = Column(Text)
+    raw_text = Column(Text)
+    created_at = Column(DateTime, default=_utcnow)
+
+    report = relationship("Report")
+    brand = relationship("Brand")
+
+
+class PasswordResetOtp(Base):
+    __tablename__ = "password_reset_otps"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    email = Column(String(255), nullable=False)
+    otp_code = Column(String(10), nullable=False)
+    otp_hash = Column(String(255), nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    used = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=_utcnow)
+
+
+class OtpRateLimit(Base):
+    __tablename__ = "otp_rate_limits"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    email = Column(String(255), nullable=False, unique=True)
+    request_count = Column(Integer, default=1)
+    last_request_at = Column(DateTime, default=_utcnow)

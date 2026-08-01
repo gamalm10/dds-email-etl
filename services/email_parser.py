@@ -52,13 +52,23 @@ class ParsedEmail:
 
 _COLOR_MAP: dict[str, str] = {
     "#92d050": "green",
+    "#a9d08e": "green",
+    "#c5e0b3": "green",
     "#ffc000": "yellow",
     "#ffff00": "yellow",
+    "#ffe599": "yellow",
+    "#fff2cc": "yellow",
     "yellow": "yellow",
     "red": "red",
+    "#fdd3d3": "red",
+    "#f7caac": "red",
     "#d0cece": "grey",
     "#e7e6e6": "grey",
+    "#d9d9d9": "grey",
+    "#bfbfbf": "grey",
     "black": "black",
+    "#deeaf6": "blue",
+    "#ffffff": "white",
 }
 
 _ARABIC_PATTERN = re.compile(r"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]")
@@ -181,3 +191,176 @@ def parse_email(raw_bytes: bytes) -> ParsedEmail:
             parsed.rows.append(row)
 
     return parsed
+
+
+def parse_clearance_materials(text: str) -> list[dict]:
+    materials = []
+    lines = text.split('\n')
+    for i, line in enumerate(lines):
+        m = re.match(r'([A-Z0-9]{10,})\s+(.+?)\s+([\d,]+)', line.strip())
+        if m:
+            materials.append({
+                "material_code": m.group(1),
+                "description": m.group(2).strip()[:200],
+                "quantity": int(m.group(3).replace(",", "")),
+            })
+    return materials
+
+
+def parse_ordering_rules(text: str) -> list[dict]:
+    rules = []
+    m = re.search(r'does not exceed\s*(\d+)([Kk]?)\$?(?:/Eur)?', text, re.IGNORECASE | re.DOTALL)
+    if m:
+        val = int(m.group(1))
+        if m.group(2).lower() == 'k':
+            val *= 1000
+        rules.append({"max_amount_usd": val, "max_amount_eur": val})
+    m = re.search(r'margin of\s*(\d+)%', text, re.IGNORECASE)
+    if m and rules:
+        rules[0]["margin_percent"] = int(m.group(1))
+    m = re.search(r'<\s*(\d+)\s*months', text, re.IGNORECASE)
+    if m and rules:
+        rules[0]["sales_months"] = int(m.group(1))
+    m = re.search(r'with[^.]*prior\s*approval', text, re.IGNORECASE)
+    if m and rules:
+        rules[0]["requires_approval"] = False
+    return rules
+
+
+def parse_signatures(text: str) -> list[dict]:
+    clean = re.sub(r'<[^>]+>', ' ', text)
+    clean = re.sub(r'&[a-z]+;', ' ', clean)
+    clean = re.sub(r'\s+', ' ', clean)
+    sigs = []
+    for seg in re.split(r'(?=Regards)', clean):
+        if 'Regards' not in seg:
+            continue
+        lines = [l.strip() for l in seg.split('\n') if l.strip() and l.strip() not in ('Regards,', 'Regards')]
+        sig = {}
+        for line in lines:
+            if re.match(r'^[A-Z][a-z]+\s+[A-Z][a-z]+', line) and not sig.get("person_name") and len(line) < 50:
+                sig["person_name"] = line[:100]
+            elif re.match(r'.*(CEO|COO|Manager|Officer|Director|Head)', line, re.IGNORECASE):
+                sig["title"] = line[:200]
+            elif re.search(r'(?:www\.|http)', line, re.IGNORECASE):
+                sig["company"] = line[:200]
+            elif re.match(r'Tel\.?\s*', line):
+                sig["phone"] = line[:100]
+            elif re.match(r'Mob\.?\s*', line):
+                sig["phone"] = (sig.get("phone", "") + " / " + line).strip().rstrip(" /")
+            elif re.match(r'^[a-zA-Z][\w.+-]*@[a-zA-Z0-9-]+\.[a-zA-Z]{2,}', line.strip()):
+                sig["email"] = line.strip()[:255]
+        if sig.get("person_name") or sig.get("email"):
+            sigs.append(sig)
+    return sigs
+
+
+def parse_percentages(text: str, brand_map: dict[str, int]) -> list[dict]:
+    metrics = []
+    patterns = [
+        (r'(\d+(?:\.\d+)?)%\s*(discount|off)', 'discount'),
+        (r'(\d+(?:\.\d+)?)%\s*price\s*increase', 'price_increase'),
+        (r'(\d+(?:\.\d+)?)%\s*(?:margin|profit)', 'margin'),
+        (r'(\d+(?:\.\d+)?)%\s*(?:DP|deposit)', 'deposit'),
+        (r'(\d+(?:\.\d+)?)%\s*(?:CAD|balance)', 'balance'),
+        (r'(\d+(?:\.\d+)?)%\s*growth', 'growth'),
+        (r'(\d+(?:\.\d+)?)%\s*volume', 'volume_increase'),
+    ]
+    for pattern, mtype in patterns:
+        for m in re.finditer(pattern, text, re.IGNORECASE):
+            metrics.append({
+                "metric_type": mtype,
+                "value": float(m.group(1)),
+                "raw_text": m.group(0)[:255],
+            })
+    return metrics
+
+
+RISK_PHRASES = [
+    (r'cancelled\s*AGAIN|supplier\s*cancelled', 'supplier_failure', 3),
+    (r'escalate', 'escalation', 3),
+    (r'ON\s*HOLD', 'blocked', 2),
+    (r'market\s*disturbance', 'market_risk', 2),
+    (r'(weeks?|days?)\s*late|delayed|delay', 'delay', 2),
+    (r'price\s*(?:increase|misalignment)', 'pricing_issue', 2),
+    (r'risk|RISK', 'risk_flag', 2),
+    (r'cancelled', 'cancellation', 3),
+    (r'blocked', 'blocked', 2),
+    (r'overdue', 'overdue', 2),
+    (r'pending\s*update', 'stalled', 1),
+    (r'no\s*response', 'unresponsive', 2),
+    (r'contradict|discrepancy|conflict', 'discrepancy', 2),
+]
+
+
+def parse_risk_language(text: str) -> list[dict]:
+    risks = []
+    for pattern, category, score in RISK_PHRASES:
+        for m in re.finditer(pattern, text, re.IGNORECASE):
+            start = max(0, m.start() - 50)
+            end = min(len(text), m.end() + 50)
+            context = text[start:end].strip()
+            risks.append({
+                "phrase": m.group(0)[:255],
+                "category": category,
+                "severity_score": score,
+                "context": context[:500],
+            })
+    return risks
+
+
+def parse_payment_terms(text: str) -> list[dict]:
+    terms = []
+    m = re.search(r'(\d+(?:\.\d+)?)%\s*(?:DP|deposit)\s*\+\s*(\d+(?:\.\d+)?)%\s*(?:CAD|balance)', text, re.IGNORECASE)
+    if m:
+        terms.append({
+            "payment_method": "DP + CAD",
+            "deposit_pct": float(m.group(1)),
+            "balance_pct": float(m.group(2)),
+            "raw_text": m.group(0),
+        })
+    m = re.search(r'(SWIFT|TT|LC|CAD|DP)\s*(?:expected|done|payment|sent)?\s*(\d{1,2}\.\d{2})', text, re.IGNORECASE)
+    if m:
+        terms.append({
+            "payment_method": m.group(1).upper(),
+            "expected_date": m.group(2),
+            "raw_text": m.group(0),
+        })
+    return terms
+
+
+def parse_negotiations(text: str) -> list[dict]:
+    negos = []
+    for m in re.finditer(r'(\d+(?:\.\d+)?)%\s*(?:discount|agreed)', text, re.IGNORECASE):
+        status = 'agreed' if 'agreed' in m.group(0).lower() else 'proposed'
+        negos.append({
+            "type": "discount",
+            "percentage": float(m.group(1)),
+            "status": status,
+            "raw_text": m.group(0),
+        })
+    for m in re.finditer(r'(negotiat|discuss)\w*\s*(?:price|discount|term)', text, re.IGNORECASE):
+        negos.append({
+            "type": "negotiation",
+            "percentage": None,
+            "status": "proposed",
+            "raw_text": m.group(0),
+        })
+    return negos
+
+
+def parse_lead_times(text: str) -> list[dict]:
+    leads = []
+    for m in re.finditer(r'(\d+)\s*days?\s*(?:to|for|lead|production|ready|shipping)', text, re.IGNORECASE):
+        leads.append({
+            "days": int(m.group(1)),
+            "status": "current",
+            "raw_text": m.group(0),
+        })
+    for m in re.finditer(r'lead\s*time\s*(?:of\s*)?(\d+(?:\.\d+)?)\s*months?', text, re.IGNORECASE):
+        leads.append({
+            "days": int(float(m.group(1)) * 30),
+            "status": "current",
+            "raw_text": m.group(0),
+        })
+    return leads

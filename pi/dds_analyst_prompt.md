@@ -89,5 +89,10 @@ Find the "Key highlights" section. Extract as a JSON array of strings.
   "key_highlights": [
     "We placed new PHC order (Jan'27) Sales",
     "Korri (ATE/Febi) – Supplier added new cost and CANCELLED order (again)"
-  ]
+  ],
+  "payment_terms": [{"payment_method": "DP + CAD", "deposit_pct": 15, "balance_pct": 85}],
+  "negotiations": [{"type": "discount", "percentage": 8, "status": "agreed"}],
+  "lead_times": [{"days": 30, "status": "current"}],
+  "risk_language": [{"phrase": "cancelled AGAIN", "category": "supplier_failure", "severity_score": 3}],
+  "percentage_metrics": [{"metric_type": "discount", "value": 8.0}]
 }

@@ -19,11 +19,21 @@ from core.models import (
 from core.schemas import (
     AnomalyOut,
     BrandOut,
+    ClearanceMaterialOut,
     DashboardSummary,
+    EmailImageOut,
+    EmailThreadOut,
     InsightOut,
+    LeadTimeOut,
+    NegotiationOut,
+    OrderingRuleOut,
+    PaymentTermOut,
+    PercentageMetricOut,
     ProcessResponse,
     ReportOut,
     ReportSummary,
+    RiskLanguageOut,
+    SignatureOut,
     TaskOut,
 )
 from services.sidecar_manager import SidecarManager
@@ -109,6 +119,96 @@ async def get_report(report_id: int, db: AsyncSession = Depends(get_db)):
     if not report:
         raise HTTPException(404, "Report not found")
     return report
+
+
+@router.get("/reports/{report_id}/clearance-materials", response_model=list[ClearanceMaterialOut])
+async def get_clearance_materials(report_id: int, db: AsyncSession = Depends(get_db)):
+    from core.models import ClearanceMaterial
+    materials = (await db.execute(
+        select(ClearanceMaterial).where(ClearanceMaterial.report_id == report_id)
+    )).scalars().all()
+    return materials
+
+
+@router.get("/reports/{report_id}/ordering-rules", response_model=list[OrderingRuleOut])
+async def get_ordering_rules(report_id: int, db: AsyncSession = Depends(get_db)):
+    from core.models import OrderingRule
+    rules = (await db.execute(
+        select(OrderingRule).where(OrderingRule.report_id == report_id)
+    )).scalars().all()
+    return rules
+
+
+@router.get("/reports/{report_id}/thread", response_model=list[EmailThreadOut])
+async def get_email_thread(report_id: int, db: AsyncSession = Depends(get_db)):
+    from core.models import EmailThread
+    thread = (await db.execute(
+        select(EmailThread).where(EmailThread.report_id == report_id).order_by(EmailThread.thread_index)
+    )).scalars().all()
+    return thread
+
+
+@router.get("/reports/{report_id}/signatures", response_model=list[SignatureOut])
+async def get_signatures(report_id: int, db: AsyncSession = Depends(get_db)):
+    from core.models import Signature
+    sigs = (await db.execute(
+        select(Signature).where(Signature.report_id == report_id)
+    )).scalars().all()
+    return sigs
+
+
+@router.get("/reports/{report_id}/images", response_model=list[EmailImageOut])
+async def get_email_images(report_id: int, db: AsyncSession = Depends(get_db)):
+    from core.models import EmailImage
+    images = (await db.execute(
+        select(EmailImage).where(EmailImage.report_id == report_id)
+    )).scalars().all()
+    return images
+
+
+@router.get("/reports/{report_id}/percentages", response_model=list[PercentageMetricOut])
+async def get_percentages(report_id: int, db: AsyncSession = Depends(get_db)):
+    from core.models import PercentageMetric
+    metrics = (await db.execute(
+        select(PercentageMetric).where(PercentageMetric.report_id == report_id)
+    )).scalars().all()
+    return metrics
+
+
+@router.get("/reports/{report_id}/risks", response_model=list[RiskLanguageOut])
+async def get_risks(report_id: int, db: AsyncSession = Depends(get_db)):
+    from core.models import RiskLanguage
+    risks = (await db.execute(
+        select(RiskLanguage).where(RiskLanguage.report_id == report_id)
+    )).scalars().all()
+    return risks
+
+
+@router.get("/reports/{report_id}/payment-terms", response_model=list[PaymentTermOut])
+async def get_payment_terms(report_id: int, db: AsyncSession = Depends(get_db)):
+    from core.models import PaymentTerm
+    terms = (await db.execute(
+        select(PaymentTerm).where(PaymentTerm.report_id == report_id)
+    )).scalars().all()
+    return terms
+
+
+@router.get("/reports/{report_id}/negotiations", response_model=list[NegotiationOut])
+async def get_negotiations(report_id: int, db: AsyncSession = Depends(get_db)):
+    from core.models import Negotiation
+    negos = (await db.execute(
+        select(Negotiation).where(Negotiation.report_id == report_id)
+    )).scalars().all()
+    return negos
+
+
+@router.get("/reports/{report_id}/lead-times", response_model=list[LeadTimeOut])
+async def get_lead_times(report_id: int, db: AsyncSession = Depends(get_db)):
+    from core.models import LeadTime
+    leads = (await db.execute(
+        select(LeadTime).where(LeadTime.report_id == report_id)
+    )).scalars().all()
+    return leads
 
 
 @router.post("/reports/process", response_model=ProcessResponse)

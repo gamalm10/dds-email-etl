@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from datetime import date, datetime
 
 from sqlalchemy import select, text
@@ -9,12 +10,20 @@ from core.models import (
     AnomalyLog,
     AvailabilityStatus,
     Brand,
+    ClearanceMaterial,
     Insight,
+    LeadTime,
+    Negotiation,
+    OrderingRule,
+    PaymentTerm,
+    PercentageMetric,
     PriorityAction,
     ProcessingLog,
     ProcessingStatus,
     Report,
     ReportItem,
+    RiskLanguage,
+    Signature,
     Task,
     ThreadSummary,
 )
@@ -87,6 +96,9 @@ class Processor:
             notified = await self.notifier.check_and_notify(report.id)
             if notified:
                 await self._log(report.id, "notification", "success", f"Sent {len(notified)} alerts")
+
+            text_body_for_extras = (report.raw_html or report.raw_text or "")
+            await self._store_enhanced_extractions(report.id, text_body_for_extras)
 
             report.processing_status = ProcessingStatus.completed
 
@@ -291,6 +303,116 @@ class Processor:
             key_highlights=json.dumps(kh) if kh else None,
         )
         self.db.add(summary)
+
+    async def _store_enhanced_extractions(self, report_id: int, text_body: str, brand_map: dict[str, int] | None = None) -> None:
+        from services.email_parser import (
+            parse_clearance_materials,
+            parse_ordering_rules,
+            parse_signatures,
+            parse_percentages,
+            parse_risk_language,
+            parse_payment_terms,
+            parse_negotiations,
+            parse_lead_times,
+        )
+
+        materials = parse_clearance_materials(text_body)
+        for m in materials:
+            self.db.add(ClearanceMaterial(
+                report_id=report_id,
+                material_code=m.get("material_code"),
+                description=m.get("description"),
+                quantity=m.get("quantity"),
+            ))
+
+        rules = parse_ordering_rules(text_body)
+        for r in rules:
+            self.db.add(OrderingRule(
+                report_id=report_id,
+                max_amount_usd=r.get("max_amount_usd"),
+                max_amount_eur=r.get("max_amount_eur"),
+                margin_percent=r.get("margin_percent"),
+                sales_months=r.get("sales_months"),
+                requires_approval=r.get("requires_approval", True),
+                rule_text=r.get("raw_text"),
+            ))
+
+        clean_text = re.sub(r'<[^>]+>', ' ', text_body)
+        clean_text = re.sub(r'\s+', ' ', clean_text)
+        sigs = parse_signatures(clean_text)
+        for s in sigs:
+            self.db.add(Signature(
+                report_id=report_id,
+                sender_email=str(s.get("email", ""))[:500] if s.get("email") else None,
+                person_name=str(s.get("person_name", ""))[:200] if s.get("person_name") else None,
+                title=str(s.get("title", ""))[:200] if s.get("title") else None,
+                company=str(s.get("company", ""))[:200] if s.get("company") else None,
+                phone=str(s.get("phone", ""))[:100] if s.get("phone") else None,
+                email=str(s.get("email", ""))[:255] if s.get("email") else None,
+                raw_text=str(s)[:1000],
+            ))
+
+        metrics = parse_percentages(text_body, brand_map or {})
+        for p in metrics:
+            self.db.add(PercentageMetric(
+                report_id=report_id,
+                metric_type=p.get("metric_type"),
+                value=p.get("value"),
+                raw_text=p.get("raw_text"),
+            ))
+
+        risks = parse_risk_language(text_body)
+        risk_score = sum(r["severity_score"] for r in risks)
+        for r in risks:
+            self.db.add(RiskLanguage(
+                report_id=report_id,
+                phrase=r.get("phrase"),
+                category=r.get("category"),
+                severity_score=r.get("severity_score", 0),
+                context=r.get("context"),
+            ))
+        report = await self.db.get(Report, report_id)
+        if report:
+            report.risk_score = risk_score
+            high_risks = [r for r in risks if r.get("severity_score", 0) >= 3]
+            report.risk_category = max(set(r["category"] for r in high_risks), key=lambda c: sum(1 for r in high_risks if r["category"] == c)) if high_risks else "low"
+
+        terms = parse_payment_terms(text_body)
+        for t in terms:
+            expected = None
+            if t.get("expected_date"):
+                try:
+                    parts = t["expected_date"].split(".")
+                    expected = date(2026, int(parts[1]), int(parts[0]))
+                except (ValueError, IndexError):
+                    pass
+            self.db.add(PaymentTerm(
+                report_id=report_id,
+                payment_method=t.get("payment_method"),
+                deposit_pct=t.get("deposit_pct"),
+                balance_pct=t.get("balance_pct"),
+                expected_date=expected,
+                raw_text=t.get("raw_text"),
+            ))
+
+        negos = parse_negotiations(text_body)
+        for n in negos:
+            self.db.add(Negotiation(
+                report_id=report_id,
+                type=n.get("type"),
+                percentage=n.get("percentage"),
+                status=n.get("status", "proposed"),
+                raw_text=n.get("raw_text"),
+            ))
+
+        leads = parse_lead_times(text_body)
+        for l in leads:
+            self.db.add(LeadTime(
+                report_id=report_id,
+                days=l.get("days"),
+                status=l.get("status"),
+                raw_text=l.get("raw_text"),
+            ))
 
     async def _log(self, report_id: int, step: str, status: str, message: str) -> None:
         log = ProcessingLog(report_id=report_id, step=step, status=status, message=message)
