@@ -6,6 +6,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes import router, set_sidecar
+from api.routes_auth_reset import router as auth_reset_router
+from api.routes_brands import router as brands_router
+from api.routes_dashboard import router as dashboard_router
+from api.routes_actions import router as actions_router
 from config.logging import setup_logging
 from core.database import async_session_factory, engine
 from services.imap_listener import ImapListener
@@ -28,9 +32,12 @@ async def lifespan(app: FastAPI):
     set_sidecar(sidecar_manager)
 
     async def on_email(raw: bytes, subject: str, received_at):
-        async with async_session_factory() as db:
-            proc = Processor(db, sidecar_manager)
-            await proc.process_email(raw, subject, received_at)
+        try:
+            async with async_session_factory() as db:
+                proc = Processor(db, sidecar_manager)
+                await proc.process_email(raw, subject, received_at)
+        except Exception as e:
+            logger.error(f"Email processing failed: {e}")
 
     imap_listener = ImapListener(on_email)
     asyncio.create_task(imap_listener.start())
@@ -57,6 +64,10 @@ app.add_middleware(
 )
 
 app.include_router(router)
+app.include_router(auth_reset_router)
+app.include_router(brands_router)
+app.include_router(dashboard_router)
+app.include_router(actions_router)
 
 
 @app.get("/health")

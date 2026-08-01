@@ -1,24 +1,37 @@
+import json
 import logging
+import re
 from datetime import date, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.models import (
+    AnomalyLog,
     AvailabilityStatus,
     Brand,
+    ClearanceMaterial,
     Insight,
+    LeadTime,
+    Negotiation,
+    OrderingRule,
+    PaymentTerm,
+    PercentageMetric,
+    PriorityAction,
     ProcessingLog,
     ProcessingStatus,
     Report,
     ReportItem,
+    RiskLanguage,
+    Signature,
     Task,
+    ThreadSummary,
 )
 from services.analytics import AnalyticsEngine
 from services.anomaly import AnomalyDetector
 from services.email_parser import ParsedEmail, parse_email
 from services.extraction import ExtractionResult, extract_email_data
-from services.imap_listener import DDS_SUBJECT_PATTERN
+from services.imap_listener import DDS_SUBJECT_PATTERN, parse_dds_date
 from services.notifier import Notifier
 from services.sidecar_manager import SidecarManager
 
@@ -34,20 +47,19 @@ class Processor:
         self.db = db
         self.sidecar = sidecar
         self.analytics = AnalyticsEngine(db)
-        self.anomaly = AnomalyDetector(db, sidecar)
+        self.anomaly = AnomalyDetector(db)
         self.notifier = Notifier(db)
 
     async def process_email(self, raw_bytes: bytes, subject: str, received_at: datetime) -> Report:
         parsed = parse_email(raw_bytes)
 
-        match = DDS_SUBJECT_PATTERN.search(subject)
-        if not match:
+        report_date = parse_dds_date(subject)
+        if not report_date:
             raise ProcessingError(f"Subject does not match DDS pattern: {subject}")
-        day, month, year = int(match.group(1)), int(match.group(2)), int(match.group(3))
 
         report = Report(
             subject=subject,
-            report_date=date(year, month, day),
+            report_date=report_date,
             sender=parsed.sender,
             recipients=parsed.recipients,
             cc_list=parsed.cc_list,
@@ -70,6 +82,8 @@ class Processor:
             await self._store_report_items(report.id, extraction, parsed)
             await self._store_tasks(report.id, extraction)
             await self._store_insights(report.id, extraction)
+            await self._store_priority_actions(report.id, extraction)
+            await self._store_thread_summary(report.id, extraction)
 
             histories = await self.analytics.compute_status_history(report.id)
             carried = await self.analytics.carry_over_tasks(report.id)
@@ -83,6 +97,9 @@ class Processor:
             if notified:
                 await self._log(report.id, "notification", "success", f"Sent {len(notified)} alerts")
 
+            text_body_for_extras = (parsed.raw_text or parsed.raw_html or "")
+            await self._store_enhanced_extractions(report.id, text_body_for_extras)
+
             report.processing_status = ProcessingStatus.completed
 
         except Exception as e:
@@ -93,6 +110,29 @@ class Processor:
 
         await self.db.commit()
         return report
+
+    async def delete_existing(self, subject: str, report_date: date) -> int | None:
+        result = await self.db.execute(
+            select(Report.id).where(
+                Report.subject == subject,
+                Report.report_date == report_date,
+            ).order_by(Report.id.desc()).limit(1)
+        )
+        row = result.first()
+        rid = row[0] if row else None
+        if not rid:
+            return None
+
+        await self.db.execute(text("UPDATE dds_insights SET matched_anomaly_id = NULL WHERE matched_anomaly_id IS NOT NULL"))
+        await self.db.execute(text("UPDATE dds_tasks SET first_seen_report_id = NULL, last_seen_report_id = NULL, resolved_at_report_id = NULL WHERE first_seen_report_id = :rid OR last_seen_report_id = :rid OR resolved_at_report_id = :rid"), {"rid": rid})
+        for table in ["dds_clearance_materials", "dds_priority_actions", "dds_thread_summaries", "dds_email_images", "dds_signatures", "dds_email_threads", "dds_ordering_rules", "dds_insights", "dds_processing_log", "dds_risk_language", "dds_payment_terms", "dds_negotiations", "dds_lead_times", "dds_percentage_metrics", "dds_status_history"]:
+            await self.db.execute(text(f"DELETE FROM {table} WHERE report_id = :rid"), {"rid": rid})
+        await self.db.execute(text("DELETE FROM dds_anomaly_log WHERE source_report_id = :rid OR matched_report_id = :rid"), {"rid": rid})
+        await self.db.execute(text("DELETE FROM dds_report_items WHERE report_id = :rid"), {"rid": rid})
+        await self.db.execute(text("DELETE FROM dds_reports WHERE id = :rid"), {"rid": rid})
+        await self.db.commit()
+        logger.info(f"Deleted existing report #{rid}: {subject[:50]}")
+        return rid
 
     async def _get_previous_context(self, report_date: date) -> str | None:
         prev = (
@@ -120,16 +160,22 @@ class Processor:
             except ValueError:
                 avail = AvailabilityStatus.unknown
 
+            def _s(val, fallback):
+                return val if val is not None and val != "" else (fallback or "")
+
             item = ReportItem(
                 report_id=report_id,
                 brand_id=brand.id,
                 availability_status=avail,
-                milestone=llm_data.get("milestone", row.milestone) or row.milestone,
-                milestone_ar=llm_data.get("milestone_ar", row.milestone_ar) or row.milestone_ar,
-                shipment_bis=llm_data.get("shipment_bis", row.shipment_bis) or row.shipment_bis,
-                comments_actions=llm_data.get("comments_actions", row.comments) or row.comments,
-                comments_actions_ar=llm_data.get("comments_actions_ar", row.comments_ar) or row.comments_ar,
-                language=llm_data.get("language", row.language) or row.language,
+                vendor=_s(llm_data.get("vendor"), ""),
+                milestone=_s(llm_data.get("milestone"), row.milestone),
+                milestone_ar=_s(llm_data.get("milestone_ar"), row.milestone_ar),
+                shipment_bis=_s(llm_data.get("shipment_bis"), row.shipment_bis),
+                comments_actions=_s(llm_data.get("comments_actions"), row.comments),
+                comments_actions_ar=_s(llm_data.get("comments_actions_ar"), row.comments_ar),
+                quantity_text=_s(llm_data.get("quantity_text"), ""),
+                financial_text=_s(llm_data.get("financial_text"), ""),
+                language=_s(llm_data.get("language"), row.language),
             )
             self.db.add(item)
 
@@ -153,15 +199,18 @@ class Processor:
 
         return brand
 
+    async def _build_item_brand_map(self, report_id: int) -> dict[str, ReportItem]:
+        rows = (
+            await self.db.execute(
+                select(ReportItem, Brand.brand_category)
+                .join(Brand, ReportItem.brand_id == Brand.id)
+                .where(ReportItem.report_id == report_id)
+            )
+        ).all()
+        return {brand_cat: item for item, brand_cat in rows}
+
     async def _store_tasks(self, report_id: int, extraction: ExtractionResult) -> None:
-        items = {
-            item.brand_category: item
-            for item in (
-                await self.db.execute(
-                    select(ReportItem).where(ReportItem.report_id == report_id)
-                )
-            ).scalars().all()
-        }
+        items = await self._build_item_brand_map(report_id)
 
         for task_data in extraction.tasks:
             item = items.get(task_data.get("brand_category", ""))
@@ -175,29 +224,44 @@ class Processor:
                 except (ValueError, TypeError):
                     pass
 
+            assigned_to = task_data.get("assigned_to")
+            if isinstance(assigned_to, list):
+                assigned_to = ", ".join(str(a) for a in assigned_to)
+
+            deadline = None
+            if task_data.get("deadline"):
+                try:
+                    deadline = date.fromisoformat(str(task_data["deadline"]))
+                except (ValueError, TypeError):
+                    pass
+
+            qv = task_data.get("quantity_value")
+            fv = task_data.get("financial_value")
             task = Task(
                 report_item_id=item.id,
                 task_description=task_data.get("description", ""),
-                assigned_to=task_data.get("assigned_to"),
+                assigned_to=assigned_to,
                 deadline=deadline,
+                deadline_text=task_data.get("deadline_text", ""),
                 task_category=task_data.get("category"),
+                priority=task_data.get("priority", "medium"),
+                is_resolved=bool(task_data.get("is_resolved", False)),
+                quantity_value=int(qv) if qv else None,
+                financial_value=float(fv) if fv else None,
+                currency=task_data.get("currency"),
                 first_seen_report_id=report_id,
                 last_seen_report_id=report_id,
+                occurrence_count=1,
             )
             self.db.add(task)
 
     async def _store_insights(self, report_id: int, extraction: ExtractionResult) -> None:
-        items = {
-            item.brand_category: item
-            for item in (
-                await self.db.execute(
-                    select(ReportItem).where(ReportItem.report_id == report_id)
-                )
-            ).scalars().all()
-        }
+        items = await self._build_item_brand_map(report_id)
 
         for ins_data in extraction.insights:
             item = items.get(ins_data.get("brand_category", ""))
+            rt = ins_data.get("risk_tags")
+            risk_tags = json.dumps(rt) if isinstance(rt, list) else (str(rt) if rt else None)
             insight = Insight(
                 report_id=report_id,
                 brand_id=item.brand_id if item else None,
@@ -206,8 +270,209 @@ class Processor:
                 description_ar=ins_data.get("description_ar", ""),
                 language=ins_data.get("language", "en"),
                 severity=ins_data.get("severity"),
+                impact=ins_data.get("impact"),
+                recommendation=ins_data.get("recommendation"),
+                risk_tags=risk_tags,
+                vendor=ins_data.get("vendor"),
             )
             self.db.add(insight)
+
+    async def _store_priority_actions(self, report_id: int, extraction: ExtractionResult) -> None:
+        actions_raw = extraction.raw.get("priority_actions", [])
+        for pa in actions_raw:
+            action_ar = pa.get("action_ar", "")
+            action = PriorityAction(
+                report_id=report_id,
+                person=pa.get("person", ""),
+                action=pa.get("action", ""),
+                action_ar=action_ar if action_ar else None,
+                category=pa.get("category"),
+                urgency=pa.get("urgency"),
+            )
+            self.db.add(action)
+
+    async def _store_thread_summary(self, report_id: int, extraction: ExtractionResult) -> None:
+        raw = extraction.raw
+        sl = raw.get("sales_timeline")
+        pm = raw.get("priority_matrix")
+        kh = raw.get("key_highlights")
+
+        summary = ThreadSummary(
+            report_id=report_id,
+            sales_timeline=json.dumps(sl) if sl else None,
+            priority_matrix=json.dumps(pm) if pm else None,
+            key_highlights=json.dumps(kh) if kh else None,
+        )
+        self.db.add(summary)
+
+    async def _store_enhanced_extractions(self, report_id: int, text_body: str, brand_map: dict[str, int] | None = None) -> None:
+        from services.email_parser import (
+            parse_clearance_materials,
+            parse_ordering_rules,
+            parse_signatures,
+            parse_percentages,
+            parse_risk_language,
+            parse_payment_terms,
+            parse_negotiations,
+            parse_lead_times,
+        )
+
+        materials = parse_clearance_materials(text_body)
+        for m in materials:
+            self.db.add(ClearanceMaterial(
+                report_id=report_id,
+                material_code=m.get("material_code"),
+                description=m.get("description"),
+                description_ar=m.get("description_ar"),
+                quantity=m.get("quantity"),
+                quantity_other=m.get("quantity_other"),
+                brand_id=None,
+            ))
+
+        rules = parse_ordering_rules(text_body)
+        for r in rules:
+            self.db.add(OrderingRule(
+                report_id=report_id,
+                max_amount_usd=r.get("max_amount_usd"),
+                max_amount_eur=r.get("max_amount_eur"),
+                margin_percent=r.get("margin_percent"),
+                sales_months=r.get("sales_months"),
+                requires_approval=r.get("requires_approval", True),
+                rule_text=r.get("raw_text"),
+            ))
+
+        clean_text = re.sub(r'<[^>]+>', ' ', text_body)
+        clean_text = re.sub(r'\s+', ' ', clean_text)
+        sigs = parse_signatures(clean_text)
+        for s in sigs:
+            self.db.add(Signature(
+                report_id=report_id,
+                sender_email=str(s.get("email", ""))[:500] if s.get("email") else None,
+                person_name=str(s.get("person_name", ""))[:200] if s.get("person_name") else None,
+                title=str(s.get("title", ""))[:200] if s.get("title") else None,
+                company=str(s.get("company", ""))[:200] if s.get("company") else None,
+                phone=str(s.get("phone", ""))[:100] if s.get("phone") else None,
+                email=str(s.get("email", ""))[:255] if s.get("email") else None,
+                raw_text=str(s)[:1000],
+            ))
+
+        metrics = parse_percentages(text_body, brand_map or {})
+        for p in metrics:
+            self.db.add(PercentageMetric(
+                report_id=report_id,
+                metric_type=p.get("metric_type"),
+                value=p.get("value"),
+                raw_text=p.get("raw_text"),
+            ))
+
+        risks = parse_risk_language(text_body)
+        risk_score = sum(r["severity_score"] for r in risks)
+        for r in risks:
+            self.db.add(RiskLanguage(
+                report_id=report_id,
+                phrase=r.get("phrase"),
+                category=r.get("category"),
+                severity_score=r.get("severity_score", 0),
+                context=r.get("context"),
+            ))
+        report = await self.db.get(Report, report_id)
+        if report:
+            report.risk_score = risk_score
+            high_risks = [r for r in risks if r.get("severity_score", 0) >= 3]
+            report.risk_category = max(set(r["category"] for r in high_risks), key=lambda c: sum(1 for r in high_risks if r["category"] == c)) if high_risks else "low"
+
+        terms = parse_payment_terms(text_body)
+        for t in terms:
+            expected = None
+            if t.get("expected_date"):
+                try:
+                    parts = t["expected_date"].split(".")
+                    expected = date(2026, int(parts[1]), int(parts[0]))
+                except (ValueError, IndexError):
+                    pass
+            self.db.add(PaymentTerm(
+                report_id=report_id,
+                payment_method=t.get("payment_method"),
+                deposit_pct=t.get("deposit_pct"),
+                balance_pct=t.get("balance_pct"),
+                expected_date=expected,
+                raw_text=t.get("raw_text"),
+            ))
+
+        negos = parse_negotiations(text_body)
+        for n in negos:
+            self.db.add(Negotiation(
+                report_id=report_id,
+                type=n.get("type"),
+                percentage=n.get("percentage"),
+                status=n.get("status", "proposed"),
+                raw_text=n.get("raw_text"),
+            ))
+
+        leads = parse_lead_times(text_body)
+        for l in leads:
+            self.db.add(LeadTime(
+                report_id=report_id,
+                days=l.get("days"),
+                status=l.get("status"),
+                raw_text=l.get("raw_text"),
+            ))
+
+    async def store_from_parsed(self, parsed_email: ParsedEmail, subject: str, sender: str, received_at: datetime | date) -> Report:
+        report_date = None
+        match = DDS_SUBJECT_PATTERN.search(subject)
+        if match:
+            report_date = date(int(match.group(3)), int(match.group(2)), int(match.group(1)))
+
+        if isinstance(received_at, datetime):
+            default_date = received_at.date()
+            received_dt = received_at
+        else:
+            default_date = received_at
+            received_dt = datetime(received_at.year, received_at.month, received_at.day)
+
+        report = Report(
+            subject=subject,
+            report_date=report_date or default_date,
+            sender=sender,
+            received_at=received_dt,
+            raw_html=parsed_email.raw_html,
+            raw_text=parsed_email.raw_text,
+            processing_status=ProcessingStatus.completed,
+        )
+        self.db.add(report)
+        await self.db.flush()
+
+        for row in parsed_email.rows:
+            brand = await self._get_or_create_brand(row.division, row.brand_category)
+            avail_str = row.availability or "unknown"
+            try:
+                avail = AvailabilityStatus(avail_str)
+            except ValueError:
+                avail = AvailabilityStatus.unknown
+            item = ReportItem(
+                report_id=report.id,
+                brand_id=brand.id,
+                availability_status=avail,
+                milestone=row.milestone,
+                milestone_ar=row.milestone_ar,
+                shipment_bis=row.shipment_bis,
+                comments_actions=row.comments,
+                comments_actions_ar=row.comments_ar,
+                language=row.language,
+            )
+            self.db.add(item)
+
+        await self.db.commit()
+
+        from services.analytics import AnalyticsEngine
+        analytics = AnalyticsEngine(self.db)
+        await analytics.compute_status_history(report.id)
+
+        log = ProcessingLog(report_id=report.id, step="store_parsed", status="success", message=f"Stored {len(parsed_email.rows)} items from chain email")
+        self.db.add(log)
+        await self.db.commit()
+        return report
 
     async def _log(self, report_id: int, step: str, status: str, message: str) -> None:
         log = ProcessingLog(report_id=report_id, step=step, status=status, message=message)

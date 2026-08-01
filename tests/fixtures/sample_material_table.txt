@@ -1,0 +1,4 @@
+Material      Category      Arabic Description                              Qty
+B7700242235666 PLUGS     شمعة 1 شمعة نيكل M16 D19 HE14 G0.9 FR7DC      25,000
+BB660241235752 PLUGS     شمعة 3 شمعة نيكل M16 D19 HE14 G1                10,000
+B0000242135517 PLUGS     شمعة 1 شمعة دبل ايريديوم M14 D26.5 HE12 G0.7    3,000
