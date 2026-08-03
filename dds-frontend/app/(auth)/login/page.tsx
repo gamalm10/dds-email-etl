@@ -4,7 +4,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Box, Card, CardContent, TextField, Button, Typography, Alert, InputAdornment, IconButton, CircularProgress,
 } from '@mui/material';
-import { Email, Lock, Visibility, VisibilityOff, DarkModeRounded } from '@mui/icons-material';
+import { Email, Lock, Visibility, VisibilityOff } from '@mui/icons-material';
 import { useAuthStore } from '@/stores/authStore';
 import api from '@/lib/api';
 
@@ -39,9 +39,9 @@ function LoginForm() {
       <Card sx={{ maxWidth: 440, width: '100%', mx: 2 }}>
         <CardContent sx={{ p: 4 }}>
           <Box sx={{ textAlign: 'center', mb: 3 }}>
-            <DarkModeRounded sx={{ fontSize: 48, color: 'primary.main', mb: 1 }} />
-            <Typography variant="h5" fontWeight={700}>DDS Email ETL</Typography>
-            <Typography variant="body2" color="text.secondary">Supply Chain Intelligence Platform</Typography>
+            <Box component="img" src="/logo.png" alt="A-part" sx={{ height: 48, mb: 1 }} />
+            <Typography variant="h5" fontWeight={700}>DDS Operation</Typography>
+            <Typography variant="body2" color="text.secondary">A-part Supply Chain Dashboard</Typography>
           </Box>
           {sessionExpired && <Alert severity="warning" sx={{ mb: 2 }}>Your session has expired. Please login again.</Alert>}
           {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}

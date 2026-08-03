@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+from pathlib import Path
 
 from services.email_parser import ParsedEmail, _has_arabic
 from services.sidecar_manager import SidecarError, SidecarManager

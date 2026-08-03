@@ -31,7 +31,13 @@ export default function ActionsPage() {
   const urgencyColors: Record<string, string> = { high: '#F44336', medium: '#FF9800', low: '#4CAF50' };
 
   const columns: GridColDef[] = [
-    { field: 'action', headerName: 'Action', flex: 1, minWidth: 250 },
+    { field: 'action', headerName: 'Action', flex: 1, minWidth: 200 },
+    { field: 'action_ar', headerName: 'Action (AR)', flex: 1, minWidth: 200,
+      renderCell: (p: any) => p.value ? (
+        <span dir="rtl" style={{ fontFamily: 'Segoe UI, Tahoma, sans-serif', textAlign: 'right', display: 'block' }}>
+          {p.value}
+        </span>
+      ) : '—' },
     { field: 'person', headerName: 'Person', width: 100, renderCell: (p: any) => <Chip label={p.value} size="small" color="primary" variant="outlined" /> },
     { field: 'category', headerName: 'Category', width: 120 },
     { field: 'urgency', headerName: 'Urgency', width: 80, renderCell: (p: any) => <Chip label={p.value} size="small" sx={{ bgcolor: urgencyColors[p.value] || '#9E9E9E', color: 'white' }} /> },

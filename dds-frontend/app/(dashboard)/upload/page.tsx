@@ -5,13 +5,14 @@ import {
   Box, Card, CardContent, Typography, Button, List, ListItem, ListItemIcon, ListItemText,
   Chip, CircularProgress, Alert, Paper,
 } from '@mui/material';
-import { CloudUpload, InsertDriveFile, CheckCircle, Error as ErrorIcon, Assessment } from '@mui/icons-material';
+import { CloudUpload, InsertDriveFile, CheckCircle, Error as ErrorIcon } from '@mui/icons-material';
 import api from '@/lib/api';
+import ThreadReviewDialog from '@/components/reports/ThreadReviewDialog';
 
 export default function UploadPage() {
   const router = useRouter();
   const [files, setFiles] = useState<File[]>([]);
-  const [uploading, setUploading] = useState(false);
+  const [reviewFile, setReviewFile] = useState<File | null>(null);
   const [results, setResults] = useState<any[]>([]);
   const [dragOver, setDragOver] = useState(false);
 
@@ -29,23 +30,14 @@ export default function UploadPage() {
     }
   };
 
-  const handleUpload = async () => {
+  const handleUpload = () => {
     if (files.length === 0) return;
-    setUploading(true);
-    setResults([]);
-    try {
-      const formData = new FormData();
-      files.forEach((f) => formData.append('files', f));
-      const res = await api.post('v1/reports/upload', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        timeout: 300000,
-      });
-      setResults(res.data);
-    } catch (err: any) {
-      setResults([{ success: false, message: err.message || 'Upload failed' }]);
-    } finally {
-      setUploading(false);
-    }
+    setReviewFile(files[0]);
+  };
+
+  const handleReviewDone = () => {
+    setReviewFile(null);
+    setFiles([]);
   };
 
   const clearAll = () => { setFiles([]); setResults([]); };
@@ -84,10 +76,10 @@ export default function UploadPage() {
               ))}
             </List>
             <Box sx={{ display: 'flex', gap: 2, mt: 2 }}>
-              <Button variant="contained" onClick={handleUpload} disabled={uploading} startIcon={uploading ? <CircularProgress size={20} /> : <CloudUpload />}>
-                {uploading ? 'Processing...' : `Upload & Process (${files.length})`}
+              <Button variant="contained" onClick={handleUpload} startIcon={<CloudUpload />}>
+                Review & Process ({files.length})
               </Button>
-              <Button variant="outlined" onClick={clearAll} disabled={uploading}>Clear</Button>
+              <Button variant="outlined" onClick={clearAll}>Clear</Button>
             </Box>
           </CardContent>
         </Card>
@@ -111,6 +103,13 @@ export default function UploadPage() {
           </CardContent>
         </Card>
       )}
+
+      <ThreadReviewDialog
+        open={reviewFile !== null}
+        file={reviewFile}
+        onClose={() => setReviewFile(null)}
+        onDone={handleReviewDone}
+      />
     </Box>
   );
 }

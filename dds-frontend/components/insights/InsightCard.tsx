@@ -7,6 +7,7 @@ interface InsightCardProps {
     id: number;
     insight_type?: string | null;
     description: string;
+    description_ar?: string | null;
     severity?: string | null;
     anomaly_score?: number | null;
     brand_id?: number | null;
@@ -40,6 +41,11 @@ export default function InsightCard({ insight, onClick, compact }: InsightCardPr
           )}
           <Box sx={{ flex: 1 }}>
             <Typography variant="body2" fontWeight={600}>{insight.description || '(no description)'}</Typography>
+            {insight.description_ar && (
+              <Typography variant="body2" dir="rtl" sx={{ fontFamily: 'Segoe UI, Tahoma, sans-serif', textAlign: 'right', mt: 0.5, color: 'text.secondary' }}>
+                {insight.description_ar}
+              </Typography>
+            )}
             {!compact && insight.impact && <Typography variant="caption" color="text.secondary">Impact: {insight.impact}</Typography>}
           </Box>
           {insight.brand_name && (

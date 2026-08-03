@@ -3,8 +3,8 @@ import { AppRouterCacheProvider } from '@mui/material-nextjs/v14-appRouter';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'DDS Email ETL',
-  description: 'Supply chain email analysis and BI reporting',
+  title: 'DDS Operation',
+  description: 'A-part supply chain email analysis and BI reporting',
 };
 
 export default function RootLayout({

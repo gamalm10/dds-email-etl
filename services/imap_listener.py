@@ -43,8 +43,9 @@ def parse_dds_date(subject: str) -> date | None:
 
 
 class ImapListener:
-    def __init__(self, on_email: OnEmailCallback):
+    def __init__(self, on_email: OnEmailCallback, sender_filter: str = ""):
         self.on_email = on_email
+        self.sender_filter = sender_filter
         self._client: IMAP4_SSL | None = None
         self._running = False
 
@@ -95,14 +96,17 @@ class ImapListener:
 
         for uid in uids:
             msg_result = await self._client.fetch(uid, "(BODY.PEEK[])")
-            raw_email = b""
-            for line in msg_result.lines:
-                if isinstance(line, bytes):
-                    raw_email += line
+            raw_email = self._extract_raw_email(msg_result.lines)
 
             subject = self._extract_subject(raw_email)
             if not subject or not DDS_SUBJECT_PATTERN.search(subject):
                 continue
+
+            if self.sender_filter:
+                sender = self._extract_sender(raw_email)
+                if self.sender_filter.lower() not in sender.lower():
+                    logger.debug(f"Skipping email from {sender} (filter: {self.sender_filter})")
+                    continue
 
             msg_date = self._extract_date(raw_email)
             results.append((raw_email, subject, msg_date))
@@ -119,14 +123,17 @@ class ImapListener:
 
         for uid in uids:
             msg_result = await self._client.fetch(uid, "(BODY.PEEK[])")
-            raw_email = b""
-            for line in msg_result.lines:
-                if isinstance(line, bytes):
-                    raw_email += line
+            raw_email = self._extract_raw_email(msg_result.lines)
 
             subject = self._extract_subject(raw_email)
             if not subject or not DDS_SUBJECT_PATTERN.search(subject):
                 continue
+
+            if self.sender_filter:
+                sender = self._extract_sender(raw_email)
+                if self.sender_filter.lower() not in sender.lower():
+                    logger.debug(f"Skipping email from {sender} (filter: {self.sender_filter})")
+                    continue
 
             msg_date = self._extract_date(raw_email)
             await self.on_email(raw_email, subject, msg_date)
@@ -134,6 +141,10 @@ class ImapListener:
     def _extract_subject(self, raw: bytes) -> str | None:
         msg = email.message_from_bytes(raw)
         return msg.get("Subject", "").strip() or None
+
+    def _extract_sender(self, raw: bytes) -> str:
+        msg = email.message_from_bytes(raw)
+        return msg.get("From", "")
 
     def _extract_date(self, raw: bytes) -> datetime:
         msg = email.message_from_bytes(raw)
@@ -144,3 +155,15 @@ class ImapListener:
             except (ValueError, TypeError):
                 pass
         return datetime.now(UTC)
+
+    def _extract_raw_email(self, lines: list) -> bytes:
+        raw = b""
+        for line in lines:
+            if isinstance(line, (bytes, bytearray)):
+                raw += line if isinstance(line, bytes) else bytes(line)
+            elif isinstance(line, str):
+                try:
+                    raw += line.encode()
+                except (UnicodeDecodeError, UnicodeEncodeError):
+                    pass
+        return raw

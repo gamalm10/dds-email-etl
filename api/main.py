@@ -10,7 +10,9 @@ from api.routes_auth_reset import router as auth_reset_router
 from api.routes_brands import router as brands_router
 from api.routes_dashboard import router as dashboard_router
 from api.routes_actions import router as actions_router
+from api.routes_users import router as users_router
 from config.logging import setup_logging
+from config.settings import get_settings
 from core.database import async_session_factory, engine
 from services.imap_listener import ImapListener
 from services.processor import Processor
@@ -18,6 +20,7 @@ from services.sidecar_manager import SidecarManager
 
 setup_logging()
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 sidecar_manager = SidecarManager()
 imap_listener: ImapListener | None = None
@@ -39,7 +42,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"Email processing failed: {e}")
 
-    imap_listener = ImapListener(on_email)
+    imap_listener = ImapListener(on_email, sender_filter=settings.email_sender_filter)
     asyncio.create_task(imap_listener.start())
 
     yield
@@ -68,6 +71,7 @@ app.include_router(auth_reset_router)
 app.include_router(brands_router)
 app.include_router(dashboard_router)
 app.include_router(actions_router)
+app.include_router(users_router)
 
 
 @app.get("/health")

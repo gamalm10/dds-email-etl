@@ -1,7 +1,9 @@
 import logging
+from collections import defaultdict
 from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from pydantic import BaseModel
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,10 +12,12 @@ from core.database import get_db
 from core.models import (
     AnomalyLog,
     Brand,
+    FetchedEmail,
     Insight,
     ProcessingStatus,
     Report,
     ReportItem,
+    StatusHistory,
     Task,
 )
 from core.schemas import (
@@ -63,7 +67,32 @@ async def list_reports(
     status: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
-    stmt = select(Report)
+    item_counts = (
+        select(ReportItem.report_id, func.count().label("cnt"))
+        .group_by(ReportItem.report_id).subquery()
+    )
+    task_counts = (
+        select(ReportItem.report_id, func.count().label("cnt"))
+        .join(Task, Task.report_item_id == ReportItem.id)
+        .group_by(ReportItem.report_id).subquery()
+    )
+    insight_counts = (
+        select(Insight.report_id, func.count().label("cnt"))
+        .group_by(Insight.report_id).subquery()
+    )
+
+    stmt = (
+        select(
+            Report.id, Report.subject, Report.report_date,
+            Report.processing_status, Report.created_at,
+            func.coalesce(item_counts.c.cnt, 0).label("item_count"),
+            func.coalesce(task_counts.c.cnt, 0).label("task_count"),
+            func.coalesce(insight_counts.c.cnt, 0).label("insight_count"),
+        )
+        .outerjoin(item_counts, Report.id == item_counts.c.report_id)
+        .outerjoin(task_counts, Report.id == task_counts.c.report_id)
+        .outerjoin(insight_counts, Report.id == insight_counts.c.report_id)
+    )
     if date_from:
         stmt = stmt.where(Report.report_date >= date_from)
     if date_to:
@@ -72,33 +101,16 @@ async def list_reports(
         stmt = stmt.where(Report.processing_status == status)
     stmt = stmt.order_by(Report.report_date.desc())
 
-    reports = (await db.execute(stmt)).scalars().all()
-    result = []
-    for r in reports:
-        item_count = (
-            await db.execute(select(func.count(ReportItem.id)).where(ReportItem.report_id == r.id))
-        ).scalar() or 0
-        task_count = (
-            await db.execute(
-                select(func.count(Task.id))
-                .join(ReportItem)
-                .where(ReportItem.report_id == r.id)
-            )
-        ).scalar() or 0
-        insight_count = (
-            await db.execute(select(func.count(Insight.id)).where(Insight.report_id == r.id))
-        ).scalar() or 0
-        result.append(ReportSummary(
-            id=r.id,
-            subject=r.subject,
-            report_date=r.report_date,
-            processing_status=r.processing_status.value if hasattr(r.processing_status, 'value') else str(r.processing_status),
-            item_count=item_count,
-            task_count=task_count,
-            insight_count=insight_count,
-            created_at=r.created_at,
-        ))
-    return result
+    rows = (await db.execute(stmt)).all()
+    return [
+        ReportSummary(
+            id=row[0], subject=row[1], report_date=row[2],
+            processing_status=row[3].value if hasattr(row[3], 'value') else str(row[3]),
+            item_count=row[5], task_count=row[6], insight_count=row[7],
+            created_at=row[4],
+        )
+        for row in rows
+    ]
 
 
 @router.get("/reports/{report_id}/raw")
@@ -112,6 +124,207 @@ async def get_raw_email(report_id: int, db: AsyncSession = Depends(get_db)):
         "subject": report.subject,
         "sender": report.sender,
         "date": report.received_at.isoformat() if report.received_at else None,
+    }
+
+
+@router.get("/reports/brand-history/{brand_id}")
+async def get_brand_history(
+    brand_id: int,
+    limit: int = Query(10, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+):
+    brand = await db.get(Brand, brand_id)
+    if not brand:
+        raise HTTPException(404, "Brand not found")
+
+    items_result = await db.execute(
+        select(ReportItem, Report)
+        .join(Report, ReportItem.report_id == Report.id)
+        .where(ReportItem.brand_id == brand_id)
+        .order_by(Report.report_date.desc())
+        .limit(limit)
+    )
+    items = items_result.all()
+
+    history_result = await db.execute(
+        select(StatusHistory)
+        .where(StatusHistory.brand_id == brand_id)
+        .order_by(StatusHistory.report_id.desc())
+        .limit(limit)
+    )
+    history = history_result.scalars().all()
+
+    insights_result = await db.execute(
+        select(Insight)
+        .where(Insight.brand_id == brand_id)
+        .order_by(Insight.report_id.desc())
+        .limit(20)
+    )
+    insights = insights_result.scalars().all()
+
+    tasks_result = await db.execute(
+        select(Task)
+        .join(ReportItem, Task.report_item_id == ReportItem.id)
+        .where(ReportItem.brand_id == brand_id)
+        .order_by(Task.first_seen_report_id.desc())
+        .limit(20)
+    )
+    tasks = tasks_result.scalars().all()
+
+    return {
+        "brand": {"id": brand.id, "division": brand.division, "brand_category": brand.brand_category},
+        "reports": [
+            {
+                "report_id": item.report_id,
+                "report_date": report.report_date.isoformat(),
+                "availability": item.availability_status.value if item.availability_status else "unknown",
+                "milestone": item.milestone,
+                "shipment_bis": item.shipment_bis,
+                "comments": item.comments_actions,
+            }
+            for item, report in items
+        ],
+        "status_history": [
+            {
+                "report_id": h.report_id,
+                "previous": h.previous_status,
+                "current": h.current_status,
+                "days_since": h.days_since_last_report,
+            }
+            for h in history
+        ],
+        "insights": [
+            {
+                "report_id": i.report_id,
+                "type": i.insight_type,
+                "description": i.description,
+                "severity": i.severity,
+                "recommendation": i.recommendation,
+            }
+            for i in insights
+        ],
+        "tasks": [
+            {
+                "id": t.id,
+                "description": t.task_description,
+                "assigned_to": t.assigned_to,
+                "deadline": t.deadline.isoformat() if t.deadline else None,
+                "category": t.task_category,
+                "priority": t.priority,
+                "status": "resolved" if t.is_resolved else "open",
+            }
+            for t in tasks
+        ],
+    }
+
+
+@router.get("/reports/cross-report-insights")
+async def get_cross_report_insights(
+    brand_id: int | None = Query(None),
+    division: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    query = select(Insight)
+    if brand_id:
+        query = query.where(Insight.brand_id == brand_id)
+    elif division:
+        query = query.join(Brand, Insight.brand_id == Brand.id).where(Brand.division == division)
+
+    result = await db.execute(query.order_by(Insight.report_id.desc()).limit(50))
+    insights = result.scalars().all()
+
+    by_type = defaultdict(list)
+    for i in insights:
+        by_type[i.insight_type or "unknown"].append(i)
+
+    return {
+        "insights": [
+            {
+                "type": insight_type,
+                "count": len(items),
+                "first_seen": min(i.report_id for i in items),
+                "last_seen": max(i.report_id for i in items),
+                "examples": [
+                    {
+                        "description": i.description,
+                        "severity": i.severity,
+                        "recommendation": i.recommendation,
+                    }
+                    for i in items[:3]
+                ],
+            }
+            for insight_type, items in sorted(by_type.items(), key=lambda x: -len(x[1]))
+        ]
+    }
+
+
+@router.get("/reports/compare")
+async def compare_reports(
+    report_id_1: int = Query(...),
+    report_id_2: int = Query(...),
+    db: AsyncSession = Depends(get_db),
+):
+    async def _load_report(rid: int):
+        report = await db.get(Report, rid)
+        if not report:
+            raise HTTPException(404, f"Report {rid} not found")
+        items_result = await db.execute(
+            select(ReportItem, Brand.brand_category)
+            .join(Brand, ReportItem.brand_id == Brand.id)
+            .where(ReportItem.report_id == rid)
+            .order_by(Brand.division, Brand.brand_category)
+        )
+        items = items_result.all()
+        return {
+            "report_id": report.id,
+            "report_date": report.report_date.isoformat(),
+            "subject": report.subject,
+            "items": [
+                {
+                    "brand_category": brand_cat,
+                    "availability": item.availability_status.value if item.availability_status else "unknown",
+                    "milestone": item.milestone,
+                    "shipment_bis": item.shipment_bis,
+                    "comments": item.comments_actions,
+                }
+                for item, brand_cat in items
+            ],
+        }
+
+    report1 = await _load_report(report_id_1)
+    report2 = await _load_report(report_id_2)
+
+    all_brands = set()
+    for r in [report1, report2]:
+        for item in r["items"]:
+            all_brands.add(item["brand_category"])
+
+    comparison = []
+    for brand_cat in sorted(all_brands):
+        item1 = next((i for i in report1["items"] if i["brand_category"] == brand_cat), None)
+        item2 = next((i for i in report2["items"] if i["brand_category"] == brand_cat), None)
+        comparison.append({
+            "brand_category": brand_cat,
+            "report_1": item1,
+            "report_2": item2,
+            "changed": (
+                not item1 or not item2
+                or item1["availability"] != item2["availability"]
+                or item1["milestone"] != item2["milestone"]
+            ),
+        })
+
+    return {
+        "report_1": report1,
+        "report_2": report2,
+        "comparison": comparison,
+        "summary": {
+            "total_brands": len(all_brands),
+            "changed_count": sum(1 for c in comparison if c["changed"]),
+            "unchanged_count": sum(1 for c in comparison if not c["changed"]),
+            "only_in_1": sum(1 for c in comparison if not c["report_1"]),
+            "only_in_2": sum(1 for c in comparison if not c["report_2"]),
+        },
     }
 
 
@@ -231,10 +444,11 @@ async def delete_report(report_id: int, db: AsyncSession = Depends(get_db)):
     if not report:
         raise HTTPException(404, "Report not found")
     await db.execute(text("UPDATE dds_insights SET matched_anomaly_id = NULL WHERE matched_anomaly_id IS NOT NULL"))
+    await db.execute(text("DELETE FROM dds_anomaly_log WHERE matched_insight_id IN (SELECT id FROM dds_insights WHERE report_id = :rid)"), {"rid": report_id})
+    await db.execute(text("DELETE FROM dds_anomaly_log WHERE source_report_id = :rid OR matched_report_id = :rid"), {"rid": report_id})
     await db.execute(text("UPDATE dds_tasks SET first_seen_report_id = NULL, last_seen_report_id = NULL, resolved_at_report_id = NULL WHERE first_seen_report_id = :rid OR last_seen_report_id = :rid OR resolved_at_report_id = :rid"), {"rid": report_id})
     for table in ["dds_clearance_materials", "dds_priority_actions", "dds_thread_summaries", "dds_email_images", "dds_signatures", "dds_email_threads", "dds_ordering_rules", "dds_insights", "dds_processing_log", "dds_risk_language", "dds_payment_terms", "dds_negotiations", "dds_lead_times", "dds_percentage_metrics", "dds_status_history"]:
         await db.execute(text(f"DELETE FROM {table} WHERE report_id = :rid"), {"rid": report_id})
-    await db.execute(text("DELETE FROM dds_anomaly_log WHERE source_report_id = :rid OR matched_report_id = :rid"), {"rid": report_id})
     await db.execute(text("DELETE FROM dds_report_items WHERE report_id = :rid"), {"rid": report_id})
     await db.execute(text("DELETE FROM dds_brands WHERE id NOT IN (SELECT DISTINCT brand_id FROM dds_report_items)"))
     await db.execute(text("DELETE FROM dds_reports WHERE id = :rid"), {"rid": report_id})
@@ -476,13 +690,15 @@ async def trigger_process(
 ):
     from services.imap_listener import ImapListener
     from services.processor import Processor
+    from config.settings import get_settings
 
+    s = get_settings()
     raw_emails: list[tuple[bytes, str, datetime]] = []
 
     async def collect(raw: bytes, subject: str, dt: datetime):
         raw_emails.append((raw, subject, dt))
 
-    listener = ImapListener(collect)
+    listener = ImapListener(collect, sender_filter=s.email_sender_filter)
     try:
         raw_emails = await listener.fetch_unprocessed()
     except Exception as e:
@@ -505,6 +721,87 @@ async def trigger_process(
     return ProcessResponse(success=True, message=f"Processed {count} emails")
 
 
+def _parse_html_content(html_str: str, subject: str, sender: str) -> "ParsedEmail":
+    from bs4 import BeautifulSoup
+    from services.email_parser import (
+        _STATUS_COLOR_MAP, _parse_bg_color, _is_header_row,
+        _detect_language, _has_arabic, _split_etd_entries,
+        _split_milestones, ParsedRow, ParsedEmail,
+    )
+
+    parsed = ParsedEmail(subject=subject, sender=sender, date="", raw_html=html_str, raw_text="")
+    soup = BeautifulSoup(html_str, "html.parser")
+    tables = soup.find_all("table")
+    main_table = None
+    for t in tables:
+        text = t.get_text(" ", strip=True)
+        if "Division" in text and "Brand" in text:
+            main_table = t
+            break
+    if not main_table:
+        return parsed
+
+    current_division = ""
+    for tr in main_table.find_all("tr"):
+        cells = tr.find_all("td")
+        if len(cells) < 4:
+            continue
+        row = ParsedRow()
+        raw_div = cells[0].get_text(" ", strip=True)
+        if raw_div:
+            current_division = raw_div
+        row.division = current_division
+        if len(cells) > 1:
+            row.brand_category = cells[1].get_text(" ", strip=True)
+        if len(cells) > 2:
+            avail_text = cells[2].get_text(" ", strip=True).lower().strip()
+            row.availability = _STATUS_COLOR_MAP.get(avail_text, "unknown")
+            if row.availability == "unknown":
+                cell_style = cells[2].get("style", "") or cells[2].get("bgcolor", "")
+                if cell_style:
+                    row.availability = _parse_bg_color(cell_style)
+        if len(cells) > 3:
+            row.milestone = cells[3].get_text(" ", strip=True)
+        etd_raw = ""
+        if len(cells) > 4:
+            etd_raw = cells[4].get_text(" ", strip=True)
+        if len(cells) > 5:
+            row.comments = cells[5].get_text(" ", strip=True)
+        language = _detect_language(row.milestone, row.comments)
+        row.language = language
+        if language in ("ar", "mixed"):
+            if _has_arabic(row.milestone):
+                row.milestone_ar = row.milestone
+            if _has_arabic(row.comments):
+                row.comments_ar = row.comments
+        if not row.brand_category or _is_header_row(row.division, row.brand_category):
+            continue
+        date_entries, no_date_entries = _split_etd_entries(etd_raw)
+        if len(date_entries) > 1:
+            milestone_parts = _split_milestones(row.milestone, len(date_entries))
+            for idx, (etd, ms) in enumerate(zip(date_entries, milestone_parts), 1):
+                r = ParsedRow(
+                    division=row.division,
+                    brand_category=f"{row.brand_category}-#{idx}",
+                    availability=row.availability,
+                    milestone=ms,
+                    milestone_ar=row.milestone_ar,
+                    shipment_bis=etd,
+                    comments=row.comments,
+                    comments_ar=row.comments_ar,
+                    language=language,
+                )
+                parsed.rows.append(r)
+            for note in no_date_entries:
+                parsed.future_etd_notes.append((row.brand_category, note))
+        else:
+            row.shipment_bis = etd_raw
+            parsed.rows.append(row)
+            for note in no_date_entries:
+                parsed.future_etd_notes.append((row.brand_category, note))
+    return parsed
+
+
 @router.post("/reports/{report_id}/reprocess", response_model=ProcessResponse)
 async def reprocess_report(
     report_id: int,
@@ -512,17 +809,77 @@ async def reprocess_report(
     sidecar: SidecarManager = Depends(get_sidecar),
 ):
     from services.processor import Processor
+    from services.email_parser import parse_email, ParsedEmail, ParsedRow
+    from services.email_thread import _parse_text_table
 
     report = await db.get(Report, report_id)
     if not report:
         raise HTTPException(404, "Report not found")
-    if not report.raw_html and not report.raw_text:
-        raise HTTPException(400, "Report has no raw content to reprocess")
 
-    raw = (report.raw_html or report.raw_text or "").encode()
+    raw_content = report.raw_html or report.raw_text or ""
     proc = Processor(db, sidecar)
-    await proc.process_email(raw, report.subject, report.received_at)
-    return ProcessResponse(success=True, report_id=report_id, message="Reprocessed successfully")
+    parsed: ParsedEmail | None = None
+
+    if raw_content:
+        parsed = _parse_html_content(raw_content, report.subject, report.sender or "")
+        if not parsed.rows and report.raw_text:
+            parsed = _parse_text_table(report.raw_text)
+
+    if (not parsed or not parsed.rows) and raw_content:
+        raise HTTPException(400, "No data table found in stored content")
+
+    if not parsed or not parsed.rows:
+        existing_items = (
+            await db.execute(
+                select(ReportItem)
+                .options(selectinload(ReportItem.brand))
+                .where(ReportItem.report_id == report_id)
+            )
+        ).scalars().all()
+        if not existing_items:
+            raise HTTPException(400, "Report has no data to reprocess")
+
+        parsed = ParsedEmail(report.subject, report.sender or "", "", raw_content, raw_content)
+        for item in existing_items:
+            row = ParsedRow(
+                division=item.brand.division if item.brand else "",
+                brand_category=item.brand.brand_category if item.brand else "",
+                availability=item.availability_status.value if item.availability_status else "",
+                milestone=item.milestone or "",
+                shipment_bis=item.shipment_bis or "",
+                comments=item.comments_actions or "",
+            )
+            if item.milestone_ar:
+                row.milestone_ar = item.milestone_ar
+            if item.comments_actions_ar:
+                row.comments_ar = item.comments_actions_ar
+            if item.language:
+                row.language = item.language
+            parsed.rows.append(row)
+
+    await proc.rebuild_report(report_id, parsed)
+    await proc._generate_discrepancy_insights(report_id, parsed)
+
+    item_count = len(parsed.rows)
+    task_count = (
+        await db.execute(
+            select(func.count(Task.id))
+            .join(ReportItem, Task.report_item_id == ReportItem.id)
+            .where(ReportItem.report_id == report_id)
+        )
+    ).scalar() or 0
+    insight_count = (
+        await db.execute(
+            select(func.count(Insight.id)).where(Insight.report_id == report_id)
+        )
+    ).scalar() or 0
+
+    return ProcessResponse(
+        success=True, report_id=report_id, message="Reprocessed successfully",
+        items_extracted=item_count,
+        tasks_extracted=task_count,
+        insights_generated=insight_count,
+    )
 
 
 @router.post("/reports/upload", response_model=list[ProcessResponse])
@@ -563,26 +920,27 @@ async def upload_eml(
         if thread_emails:
             chain_count = 0
             for te in thread_emails:
-                try:
-                    received_at = te.date if te.date else datetime.utcnow()
-                except Exception:
-                    received_at = datetime.utcnow()
-
                 te_subject = te.subject or f"Chain email from {te.sender or 'unknown'}"
                 te_sender = te.sender or ""
+                has_real_timestamp = bool(te.date)
+                try:
+                    received_at = te.date.replace(microsecond=0) if te.date else datetime.utcnow().replace(microsecond=0)
+                except Exception:
+                    received_at = datetime.utcnow().replace(microsecond=0)
+                    has_real_timestamp = False
 
                 existing = (await db.execute(
-                    select(Report.id).where(
-                        Report.subject == te_subject,
-                        Report.received_at == received_at,
-                    ).limit(1)
+                    select(Report).where(Report.subject == te_subject).limit(1)
                 )).scalar_one_or_none()
-
-                if existing:
+                if existing and has_real_timestamp and existing.received_at:
+                    if existing.received_at.replace(microsecond=0) == received_at.replace(microsecond=0):
+                        continue
+                elif existing:
                     continue
 
                 try:
-                    await proc.store_from_parsed(te.parsed, te_subject, te_sender, received_at)
+                    report = await proc.store_from_parsed(te.parsed, te_subject, te_sender, received_at)
+                    await proc.enrich_from_parsed(report.id, te.parsed)
                     chain_count += 1
                 except Exception as e:
                     logger.error(f"Failed to store chain email '{te_subject}': {e}")
@@ -596,26 +954,33 @@ async def upload_eml(
                 continue
 
         parsed = parse_email(raw)
-        report_date = None
-        from services.imap_listener import DDS_SUBJECT_PATTERN
-        match = DDS_SUBJECT_PATTERN.search(parsed.subject) if parsed.subject else None
-        if match:
-            report_date = date(int(match.group(3)), int(match.group(2)), int(match.group(1)))
-        if report_date:
-            existing_id = await proc.delete_existing(parsed.subject, report_date)
-        else:
-            existing_id = None
-
+        has_real_timestamp = bool(parsed.date)
         try:
-            received_at = parsedate_to_datetime(parsed.date) if parsed.date else datetime.utcnow()
+            received_at = parsedate_to_datetime(parsed.date).replace(microsecond=0) if parsed.date else datetime.utcnow().replace(microsecond=0)
         except Exception:
-            received_at = datetime.utcnow()
+            received_at = datetime.utcnow().replace(microsecond=0)
+            has_real_timestamp = False
+
+        existing = (await db.execute(
+            select(Report).where(Report.subject == parsed.subject).limit(1)
+        )).scalar_one_or_none()
+        if existing and has_real_timestamp and existing.received_at:
+            if existing.received_at.replace(microsecond=0) == received_at.replace(microsecond=0):
+                results.append(ProcessResponse(
+                    success=False, message=f"Report already exists (ID #{existing.id})",
+                    report_id=existing.id,
+                ))
+                continue
+        elif existing and not has_real_timestamp:
+            results.append(ProcessResponse(
+                success=False, message=f"Report already exists (ID #{existing.id})",
+                report_id=existing.id,
+            ))
+            continue
 
         try:
             report = await proc.process_email(raw, parsed.subject, received_at)
             msg = "Uploaded and processed"
-            if existing_id:
-                msg += " (replaced existing)"
 
             item_count = len(parsed.rows)
             task_count = (
@@ -853,3 +1218,379 @@ async def dashboard_summary(db: AsyncSession = Depends(get_db)):
         last_report_date=last_report,
         status_distribution=dist,
     )
+
+
+class PreviewThreadRequest(BaseModel):
+    content: str
+
+
+@router.post("/emails/preview-thread")
+async def preview_thread(req: PreviewThreadRequest, db: AsyncSession = Depends(get_db)):
+    from services.email_thread import extract_thread, _parse_text_table, _has_dds_table
+    import re
+    content = req.content
+    if '<html' in content.lower() or '<body' in content.lower():
+        content = re.sub(r'<style[^>]*>.*?</style>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r'<[^>]+>', ' ', content)
+        content = re.sub(r'&[a-z]+;', ' ', content)
+        content = re.sub(r'\s+', ' ', content)
+
+    results = []
+    positions = [m.start() for m in re.finditer(r'(?m)^From:\s*.+@', content)]
+    if not positions:
+        positions = [m.start() for m in re.finditer(r'(?m)^From:\s*\'?', content)]
+    prev = 0
+    for pos in positions:
+        if pos == 0:
+            prev = pos
+            continue
+        segment = content[prev:pos]
+        prev = pos
+        if not _has_dds_table(segment):
+            continue
+        subj_match = re.search(r'(?m)^Subject:\s*(.+)', segment)
+        date_match = re.search(r'(?m)^Sent:\s*(.+)', segment)
+        subject = subj_match.group(1).strip() if subj_match else ""
+        date_str = date_match.group(1).strip() if date_match else ""
+        if "operation dds" not in subject.lower():
+            continue
+        try:
+            parsed = _parse_text_table(segment)
+        except Exception:
+            continue
+        if parsed.rows:
+            from_match = re.search(r'(?m)^From:\s*(.+)', segment)
+            sender = from_match.group(1).strip()[:60] if from_match else ""
+            raw_text = segment.strip()
+            results.append({
+                "subject": subject,
+                "sender": sender,
+                "date_str": date_str,
+                "row_count": len(parsed.rows),
+                "raw_text": raw_text,
+            })
+    last_segment = content[prev:] if prev > 0 else ""
+    if last_segment and _has_dds_table(last_segment):
+        subj_match = re.search(r'(?m)^Subject:\s*(.+)', last_segment)
+        date_match = re.search(r'(?m)^Sent:\s*(.+)', last_segment)
+        subject = subj_match.group(1).strip() if subj_match else ""
+        date_str = date_match.group(1).strip() if date_match else ""
+        if "operation dds" in subject.lower():
+            try:
+                parsed = _parse_text_table(last_segment)
+                if parsed.rows:
+                    from_match = re.search(r'(?m)^From:\s*(.+)', last_segment)
+                    sender = from_match.group(1).strip()[:60] if from_match else ""
+                    raw_text = last_segment.strip()
+                    results.append({
+                        "subject": subject,
+                        "sender": sender,
+                        "date_str": date_str,
+                        "row_count": len(parsed.rows),
+                        "raw_text": raw_text,
+                    })
+            except Exception:
+                pass
+    return results
+
+
+class PreviewUploadResponse(BaseModel):
+    subject: str
+    sender: str
+    date_str: str
+    row_count: int
+    raw_text: str
+    raw_html: str
+    valid: bool
+
+
+@router.post("/emails/preview-upload", response_model=list[PreviewUploadResponse])
+async def preview_upload(files: list[UploadFile] = File(...), db: AsyncSession = Depends(get_db)):
+    from services.email_thread import extract_thread
+
+    if not files:
+        raise HTTPException(400, "No files uploaded")
+    raw = await files[0].read()
+    thread_emails = extract_thread(raw)
+
+    return [
+        PreviewUploadResponse(
+            subject=te.subject,
+            sender=te.sender,
+            date_str=te.date_str,
+            row_count=len(te.parsed.rows),
+            raw_text=te.parsed.raw_text,
+            raw_html=te.parsed.raw_html or "",
+            valid=len(te.parsed.rows) > 0,
+        )
+        for te in thread_emails
+    ]
+
+
+class ProcessSelectedRequest(BaseModel):
+    emails: list[dict]
+
+
+@router.post("/emails/process-selected", response_model=list[ProcessResponse])
+async def process_selected(
+    req: ProcessSelectedRequest,
+    db: AsyncSession = Depends(get_db),
+    sidecar: SidecarManager = Depends(get_sidecar),
+):
+    from services.processor import Processor
+    from services.email_thread import _parse_text_table
+
+    results: list[ProcessResponse] = []
+    proc = Processor(db, sidecar)
+
+    for email_data in req.emails:
+        subject = email_data.get("subject", "")
+        raw_text = email_data.get("raw_text", "")
+        raw_html = email_data.get("raw_html", "")
+        sender = email_data.get("sender", "")
+        date_str = email_data.get("date_str", "")
+
+        if not raw_text:
+            results.append(ProcessResponse(success=False, message=f"No content for '{subject}'"))
+            continue
+
+        existing = (await db.execute(
+            select(Report).where(Report.subject == subject).limit(1)
+        )).scalar_one_or_none()
+        if existing:
+            results.append(ProcessResponse(success=False, message=f"Already exists (ID #{existing.id})", report_id=existing.id))
+            continue
+
+        try:
+            from email.utils import parsedate_to_datetime
+            received_at = parsedate_to_datetime(date_str).replace(microsecond=0) if date_str else datetime.utcnow().replace(microsecond=0)
+        except Exception:
+            received_at = datetime.utcnow().replace(microsecond=0)
+
+        try:
+            parsed = None
+            if raw_html:
+                try:
+                    html_bytes = f"<html><body>{raw_html}</body></html>".encode()
+                    from services.email_parser import parse_email
+                    parsed = parse_email(html_bytes)
+                    if parsed.rows:
+                        parsed.raw_html = raw_html
+                        parsed.raw_text = raw_text
+                except Exception:
+                    parsed = None
+            if not parsed or not parsed.rows:
+                parsed = _parse_text_table(raw_text)
+            if not parsed.rows:
+                results.append(ProcessResponse(success=False, message=f"No table found in '{subject}'"))
+                continue
+
+            report = await proc.store_from_parsed(parsed, subject, sender or "", received_at)
+            await proc.enrich_from_parsed(report.id, parsed)
+
+            task_count = (await db.execute(
+                select(func.count(Task.id))
+                .join(ReportItem, Task.report_item_id == ReportItem.id)
+                .where(ReportItem.report_id == report.id)
+            )).scalar() or 0
+            insight_count = (await db.execute(
+                select(func.count(Insight.id)).where(Insight.report_id == report.id)
+            )).scalar() or 0
+
+            results.append(ProcessResponse(
+                success=True, report_id=report.id, message=f"Processed '{subject[:50]}'",
+                items_extracted=len(parsed.rows),
+                tasks_extracted=task_count,
+                insights_generated=insight_count,
+            ))
+        except Exception as e:
+            logger.error(f"Failed to process '{subject}': {e}")
+            results.append(ProcessResponse(success=False, message=f"Failed: {e}"))
+
+    return results
+
+
+@router.get("/brands")
+async def list_brands(
+    division: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    query = select(Brand)
+    if division:
+        query = query.where(Brand.division == division)
+    result = await db.execute(query.order_by(Brand.division, Brand.brand_category))
+    brands = result.scalars().all()
+    return [{"id": b.id, "division": b.division, "brand_category": b.brand_category} for b in brands]
+
+
+@router.get("/settings/email-status")
+async def get_email_status():
+    from config.settings import get_settings
+    settings = get_settings()
+
+    imap_ok = False
+    imap_error = ""
+    try:
+        from aioimaplib import IMAP4_SSL
+        client = IMAP4_SSL(host=settings.imap_host, port=settings.imap_port, timeout=10)
+        await client.wait_hello_from_server()
+        await client.login(settings.imap_user, settings.imap_password)
+        await client.select("INBOX")
+        imap_ok = True
+        await client.logout()
+    except Exception as e:
+        imap_error = str(e)
+
+    smtp_ok = False
+    smtp_error = ""
+    try:
+        import smtplib
+        if settings.smtp_port == 465:
+            server = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=10)
+        else:
+            server = smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10)
+            server.starttls()
+        if settings.smtp_user and settings.smtp_password:
+            server.login(settings.smtp_user, settings.smtp_password)
+        smtp_ok = True
+        server.quit()
+    except Exception as e:
+        smtp_error = str(e)
+
+    return {
+        "imap": {
+            "connected": imap_ok,
+            "host": settings.imap_host,
+            "port": settings.imap_port,
+            "user": settings.imap_user,
+            "error": imap_error,
+        },
+        "smtp": {
+            "connected": smtp_ok,
+            "host": settings.smtp_host,
+            "port": settings.smtp_port,
+            "user": settings.smtp_user,
+            "error": smtp_error,
+        },
+        "sender_filter": settings.email_sender_filter,
+    }
+
+
+@router.get("/settings/fetched-emails")
+async def list_fetched_emails(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    count_result = await db.execute(select(func.count(FetchedEmail.id)))
+    total = count_result.scalar()
+
+    result = await db.execute(
+        select(FetchedEmail)
+        .order_by(FetchedEmail.fetched_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    emails = result.scalars().all()
+
+    return {
+        "emails": [
+            {
+                "id": e.id,
+                "uid": e.uid,
+                "subject": e.subject,
+                "sender": e.sender,
+                "received_at": e.received_at.isoformat() if e.received_at else None,
+                "fetched_at": e.fetched_at.isoformat() if e.fetched_at else None,
+                "processing_status": e.processing_status,
+                "report_id": e.report_id,
+                "error_message": e.error_message,
+            }
+            for e in emails
+        ],
+        "total": total,
+    }
+
+
+@router.get("/settings/email-stats")
+async def get_email_stats(db: AsyncSession = Depends(get_db)):
+    total = (await db.execute(select(func.count(FetchedEmail.id)))).scalar() or 0
+    completed = (await db.execute(
+        select(func.count(FetchedEmail.id)).where(FetchedEmail.processing_status == "completed")
+    )).scalar() or 0
+    pending = (await db.execute(
+        select(func.count(FetchedEmail.id)).where(FetchedEmail.processing_status == "pending")
+    )).scalar() or 0
+    processing = (await db.execute(
+        select(func.count(FetchedEmail.id)).where(FetchedEmail.processing_status == "processing")
+    )).scalar() or 0
+    failed = (await db.execute(
+        select(func.count(FetchedEmail.id)).where(FetchedEmail.processing_status == "failed")
+    )).scalar() or 0
+
+    last_fetched = await db.execute(
+        select(FetchedEmail.fetched_at).order_by(FetchedEmail.fetched_at.desc()).limit(1)
+    )
+    last_date = last_fetched.scalar()
+
+    return {
+        "total": total,
+        "completed": completed,
+        "pending": pending,
+        "processing": processing,
+        "failed": failed,
+        "last_fetched": last_date.isoformat() if last_date else None,
+    }
+
+
+@router.post("/settings/reprocess-email")
+async def reprocess_email(
+    email_id: int = Query(...),
+    db: AsyncSession = Depends(get_db),
+    sidecar: SidecarManager = Depends(get_sidecar),
+):
+    fetched = await db.get(FetchedEmail, email_id)
+    if not fetched:
+        raise HTTPException(404, "Fetched email not found")
+    if not fetched.report_id:
+        raise HTTPException(404, "No report associated with this email")
+
+    report = await db.get(Report, fetched.report_id)
+    if not report:
+        raise HTTPException(404, "Report not found")
+
+    try:
+        from services.processor import Processor
+        from services.email_parser import parse_email
+
+        proc = Processor(db, sidecar)
+        if report.raw_html:
+            parsed = _parse_html_content(report.raw_html, report.subject, report.sender or "")
+            await proc.rebuild_report(report.id, parsed)
+            await proc._generate_discrepancy_insights(report.id, parsed)
+        fetched.processing_status = "completed"
+        fetched.error_message = None
+        await db.commit()
+        return {"success": True, "message": "Email reprocessed"}
+    except Exception as e:
+        fetched.processing_status = "failed"
+        fetched.error_message = str(e)[:500]
+        await db.commit()
+        return {"success": False, "message": str(e)}
+
+
+@router.delete("/settings/fetched-email/{email_id}")
+async def delete_fetched_email(
+    email_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    fetched = await db.get(FetchedEmail, email_id)
+    if not fetched:
+        raise HTTPException(404, "Not found")
+    if fetched.report_id:
+        report = await db.get(Report, fetched.report_id)
+        if report:
+            await db.delete(report)
+    await db.delete(fetched)
+    await db.commit()
+    return {"success": True, "message": "Deleted"}

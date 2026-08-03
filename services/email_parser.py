@@ -48,6 +48,7 @@ class ParsedEmail:
         self.recipients = recipients
         self.cc_list = cc_list
         self.rows: list[ParsedRow] = []
+        self.future_etd_notes: list[tuple[str, str]] = []
 
 
 _COLOR_MAP: dict[str, str] = {
@@ -60,23 +61,110 @@ _COLOR_MAP: dict[str, str] = {
     "#fff2cc": "yellow",
     "yellow": "yellow",
     "red": "red",
+    "#c00000": "red",
     "#fdd3d3": "red",
     "#f7caac": "red",
     "#d0cece": "grey",
     "#e7e6e6": "grey",
     "#d9d9d9": "grey",
     "#bfbfbf": "grey",
+    "silver": "grey",
     "black": "black",
     "#deeaf6": "blue",
+    "#d9e2f3": "blue",
     "#ffffff": "white",
+    "white": "white",
 }
+
+_STATUS_COLOR_MAP: dict[str, str] = {
+    "in transit": "yellow",
+    "in prod/packing": "green",
+    "pending": "yellow",
+    "under clearance": "yellow",
+    "under study": "yellow",
+    "order proposal": "red",
+    "new": "blue",
+}
+
+_MILESTONE_STATUSES = [
+    "in transit",
+    "in prod/packing",
+    "under clearance",
+    "under study",
+    "order proposal",
+    "pending",
+    "new",
+]
 
 _ARABIC_PATTERN = re.compile(r"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]")
 _HEADER_DIVISIONS = {"division", "brand/ category", "brand/category", ""}
+_ETD_SPLIT_RE = re.compile(r'\b(\d+)\s*/\s*')
 
 
 def _is_header_row(division: str, brand_category: str) -> bool:
-    return division.lower().strip() in _HEADER_DIVISIONS or brand_category.lower().strip() in _HEADER_DIVISIONS
+    clean_brand = brand_category.lower().strip()
+    if re.search(r'-#\d+$', clean_brand):
+        clean_brand = clean_brand.rsplit("-#", 1)[0]
+    return division.lower().strip() in _HEADER_DIVISIONS or clean_brand in _HEADER_DIVISIONS
+
+
+def _split_etd_entries(text: str) -> tuple[list[str], list[str]]:
+    if not text or not _ETD_SPLIT_RE.search(text):
+        return ([], [])
+
+    date_entries: list[str] = []
+    no_date_entries: list[str] = []
+
+    parts = _ETD_SPLIT_RE.split(text)
+    if not parts or parts[0].strip():
+        return ([], [])
+
+    i = 1
+    while i < len(parts) - 1:
+        num = parts[i]
+        entry = parts[i + 1].strip()
+        if re.search(r'\d{2}\.\d{2}', entry):
+            cleaned = re.sub(r'\s+', ' ', entry).strip().rstrip(' -TBCtbc')
+            date_entries.append(cleaned)
+        else:
+            no_date_entries.append(f"{num}/ {entry}")
+        i += 2
+
+    return (date_entries, no_date_entries)
+
+
+def _split_milestones(text: str, count: int) -> list[str]:
+    if not text:
+        return [""] * max(count, 1)
+
+    text_lower = text.lower().strip()
+    parts: list[str] = []
+    pos = 0
+    while pos < len(text_lower) and len(parts) < count:
+        while pos < len(text_lower) and text_lower[pos].isspace():
+            pos += 1
+        if pos >= len(text_lower):
+            break
+
+        matched = False
+        for status in sorted(_MILESTONE_STATUSES, key=len, reverse=True):
+            if text_lower[pos:].startswith(status):
+                end = pos + len(status)
+                parts.append(text[pos:end].strip())
+                pos = end
+                matched = True
+                break
+        if not matched:
+            remaining = text_lower[pos:].split(None, 1)
+            if remaining:
+                parts.append(remaining[0])
+                pos += len(remaining[0])
+            else:
+                break
+
+    while len(parts) < count:
+        parts.append(parts[-1] if parts else "")
+    return parts[:count]
 
 
 def _has_arabic(text: str) -> bool:
@@ -99,11 +187,18 @@ def _detect_language(*texts: str) -> str:
 
 
 def _parse_bg_color(style: str) -> str:
-    m = re.search(r"background[:\-]+\s*(#[0-9a-f]{6}|[a-z]+)", style, re.IGNORECASE)
+    if re.match(r'^#[0-9a-fA-F]{6}$', style.strip()):
+        return _COLOR_MAP.get(style.strip().lower(), "unknown")
+    m = re.search(r'background(?:-color)?\s*:\s*([^;]+)', style, re.IGNORECASE)
     if m:
-        color = m.group(1).lower()
-        return _COLOR_MAP.get(color, "unknown")
-    return "unknown"
+        value = m.group(1).strip().lower()
+        rgb_match = re.match(r'rgb\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)', value)
+        if rgb_match:
+            r, g, b = int(rgb_match.group(1)), int(rgb_match.group(2)), int(rgb_match.group(3))
+            hex_val = f'#{r:02x}{g:02x}{b:02x}'
+            return _COLOR_MAP.get(hex_val, "unknown")
+        return _COLOR_MAP.get(value, "unknown")
+    return _COLOR_MAP.get(style.strip().lower(), "unknown")
 
 
 def parse_email(raw_bytes: bytes) -> ParsedEmail:
@@ -171,30 +266,58 @@ def parse_email(raw_bytes: bytes) -> ParsedEmail:
             row.brand_category = cells[1].get_text(" ", strip=True)
 
         if len(cells) > 2:
-            cell_style = cells[2].get("style", "") or cells[2].get("bgcolor", "")
-            if cell_style:
-                row.availability = _parse_bg_color(cell_style)
+            avail_text = cells[2].get_text(" ", strip=True).lower().strip()
+            row.availability = _STATUS_COLOR_MAP.get(avail_text, "unknown")
+            if row.availability == "unknown":
+                cell_style = cells[2].get("style", "") or cells[2].get("bgcolor", "")
+                if cell_style:
+                    row.availability = _parse_bg_color(cell_style)
 
         if len(cells) > 3:
             row.milestone = cells[3].get_text(" ", strip=True)
 
+        etd_raw = ""
         if len(cells) > 4:
-            row.shipment_bis = cells[4].get_text(" ", strip=True)
+            etd_raw = cells[4].get_text(" ", strip=True)
 
         if len(cells) > 5:
             row.comments = cells[5].get_text(" ", strip=True)
 
-        lang = _detect_language(row.milestone, row.comments)
-        row.language = lang
+        language = _detect_language(row.milestone, row.comments)
+        row.language = language
 
-        if lang in ("ar", "mixed"):
+        if language in ("ar", "mixed"):
             if _has_arabic(row.milestone):
                 row.milestone_ar = row.milestone
             if _has_arabic(row.comments):
                 row.comments_ar = row.comments
 
-        if row.brand_category and not _is_header_row(row.division, row.brand_category):
+        if not row.brand_category or _is_header_row(row.division, row.brand_category):
+            continue
+
+        date_entries, no_date_entries = _split_etd_entries(etd_raw)
+        if len(date_entries) > 1:
+            milestone_parts = _split_milestones(row.milestone, len(date_entries))
+            for idx, (etd, ms) in enumerate(zip(date_entries, milestone_parts), 1):
+                r = ParsedRow(
+                    division=row.division,
+                    brand_category=f"{row.brand_category}-#{idx}",
+                    availability=row.availability,
+                    milestone=ms,
+                    milestone_ar=row.milestone_ar,
+                    shipment_bis=etd,
+                    comments=row.comments,
+                    comments_ar=row.comments_ar,
+                    language=language,
+                )
+                parsed.rows.append(r)
+            for note in no_date_entries:
+                parsed.future_etd_notes.append((row.brand_category, note))
+        else:
+            row.shipment_bis = etd_raw
             parsed.rows.append(row)
+            for note in no_date_entries:
+                parsed.future_etd_notes.append((row.brand_category, note))
 
     return parsed
 

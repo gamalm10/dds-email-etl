@@ -32,7 +32,14 @@ export default function ActionDetailPage() {
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3 }}>
         <IconButton onClick={() => router.push('/actions')}><ArrowBack /></IconButton>
-        <Box sx={{ flex: 1 }}><Typography variant="h5">{a.action}</Typography></Box>
+        <Box sx={{ flex: 1 }}>
+          <Typography variant="h5">{a.action}</Typography>
+          {a.action_ar && (
+            <Typography variant="body1" dir="rtl" sx={{ fontFamily: 'Segoe UI, Tahoma, sans-serif', textAlign: 'right', mt: 0.5, color: 'text.secondary' }}>
+              {a.action_ar}
+            </Typography>
+          )}
+        </Box>
         <IconButton onClick={fetch}><Refresh /></IconButton>
       </Box>
 

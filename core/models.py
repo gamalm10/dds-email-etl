@@ -410,6 +410,33 @@ class LeadTime(Base):
     brand = relationship("Brand")
 
 
+class Role(Base):
+    __tablename__ = "roles"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(50), unique=True, nullable=False)
+    description = Column(Text)
+    permissions = Column(Text)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow)
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(100), unique=True, nullable=False)
+    email = Column(String(255), unique=True, nullable=False)
+    password_hash = Column(String(255), nullable=False)
+    role_id = Column(Integer, ForeignKey("roles.id"), nullable=False)
+    is_active = Column(Boolean, default=True)
+    last_login = Column(DateTime)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow)
+
+    role = relationship("Role")
+
+
 class PasswordResetOtp(Base):
     __tablename__ = "password_reset_otps"
 
@@ -429,3 +456,17 @@ class OtpRateLimit(Base):
     email = Column(String(255), nullable=False, unique=True)
     request_count = Column(Integer, default=1)
     last_request_at = Column(DateTime, default=_utcnow)
+
+
+class FetchedEmail(Base):
+    __tablename__ = "dds_fetched_emails"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    uid = Column(String(50))
+    subject = Column(Text)
+    sender = Column(String(255))
+    received_at = Column(DateTime)
+    fetched_at = Column(DateTime, default=_utcnow)
+    processing_status = Column(String(20), default="pending")
+    report_id = Column(Integer, ForeignKey("dds_reports.id"), nullable=True)
+    error_message = Column(Text, nullable=True)

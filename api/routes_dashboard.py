@@ -10,46 +10,58 @@ router = APIRouter(prefix="/api/v1/dashboard", tags=["Dashboard"])
 
 @router.get("/brands")
 async def dashboard_brands(db: AsyncSession = Depends(get_db)):
+    task_counts = (
+        select(ReportItem.brand_id, func.count().label("total_tasks"))
+        .join(Task, Task.report_item_id == ReportItem.id)
+        .group_by(ReportItem.brand_id).subquery()
+    )
+    open_task_counts = (
+        select(ReportItem.brand_id, func.count().label("open_tasks"))
+        .join(Task, Task.report_item_id == ReportItem.id)
+        .where(Task.is_resolved == False)
+        .group_by(ReportItem.brand_id).subquery()
+    )
+    insight_counts = (
+        select(Insight.brand_id, func.count().label("total_insights"))
+        .where(Insight.brand_id.isnot(None))
+        .group_by(Insight.brand_id).subquery()
+    )
+
     rows = (await db.execute(
         select(
             Brand.id, Brand.division, Brand.brand_category, Brand.is_active,
-            func.max(ReportItem.availability_status).label("latest_status"),
-            func.max(ReportItem.milestone).label("latest_milestone"),
-            func.max(ReportItem.vendor).label("vendor"),
+            func.coalesce(func.max(ReportItem.availability_status), "").label("latest_status"),
+            func.coalesce(func.max(ReportItem.milestone), "").label("latest_milestone"),
+            func.coalesce(func.max(ReportItem.vendor), "").label("vendor"),
             func.count(ReportItem.id).label("total_reports"),
             func.count(Report.id.distinct()).label("report_count"),
+            func.coalesce(task_counts.c.total_tasks, 0).label("total_tasks"),
+            func.coalesce(open_task_counts.c.open_tasks, 0).label("open_tasks"),
+            func.coalesce(insight_counts.c.total_insights, 0).label("total_insights"),
         )
         .outerjoin(ReportItem, ReportItem.brand_id == Brand.id)
         .outerjoin(Report, Report.id == ReportItem.report_id)
+        .outerjoin(task_counts, Brand.id == task_counts.c.brand_id)
+        .outerjoin(open_task_counts, Brand.id == open_task_counts.c.brand_id)
+        .outerjoin(insight_counts, Brand.id == insight_counts.c.brand_id)
         .where(Brand.is_active == True)
         .group_by(Brand.id)
         .order_by(func.count(Report.id.distinct()).desc())
         .limit(200)
     )).all()
 
-    brands = []
-    for row in rows:
-        tasks_q = (await db.execute(
-            select(func.count(Task.id)).join(ReportItem, Task.report_item_id == ReportItem.id)
-            .where(ReportItem.brand_id == row[0])
-        )).scalar() or 0
-        open_tasks = (await db.execute(
-            select(func.count(Task.id)).join(ReportItem, Task.report_item_id == ReportItem.id)
-            .where(ReportItem.brand_id == row[0], Task.is_resolved == False)
-        )).scalar() or 0
-        insights_q = (await db.execute(
-            select(func.count(Insight.id)).where(Insight.brand_id == row[0])
-        )).scalar() or 0
-
-        status = row[3].value if row[3] and hasattr(row[3], 'value') else str(row[3] or "unknown")
-        brands.append({
+    return [
+        {
             "id": row[0], "division": row[1], "brand_category": row[2],
-            "is_active": row[3], "latest_status": status,
-            "latest_milestone": row[4], "vendor": row[5],
-            "total_reports": row[6] or 0,
-            "total_tasks": tasks_q, "open_tasks": open_tasks, "total_insights": insights_q,
-        })
-    return brands
+            "is_active": row[3],
+            "latest_status": row[4].value if row[4] and hasattr(row[4], 'value') else str(row[4] or "unknown"),
+            "latest_milestone": row[5], "vendor": row[6],
+            "total_reports": row[7] or 0,
+            "total_tasks": row[9], "open_tasks": row[10], "total_insights": row[11],
+            "report_count": row[8] or 0,
+        }
+        for row in rows
+    ]
 
 
 @router.get("/issues")
@@ -140,17 +152,35 @@ async def dashboard_tasks(assigned_to: str | None = Query(None), db: AsyncSessio
 
 @router.get("/progress")
 async def dashboard_progress(db: AsyncSession = Depends(get_db)):
-    total = (await db.execute(select(func.count(Brand.id)).where(Brand.is_active == True))).scalar() or 0
-    red = (await db.execute(select(func.count(ReportItem.id.distinct())).where(ReportItem.availability_status == "red"))).scalar() or 0
-    yellow = (await db.execute(select(func.count(ReportItem.id.distinct())).where(ReportItem.availability_status == "yellow"))).scalar() or 0
-    green = (await db.execute(select(func.count(ReportItem.id.distinct())).where(ReportItem.availability_status == "green"))).scalar() or 0
-    open_tasks = (await db.execute(select(func.count(Task.id)).where(Task.is_resolved == False))).scalar() or 0
-    overdue = (await db.execute(select(func.count(Task.id)).where(Task.is_overdue == True, Task.is_resolved == False))).scalar() or 0
+    status_result = (await db.execute(
+        select(
+            func.count(func.distinct(Brand.id)).label("total_brands"),
+            func.sum(func.if_(ReportItem.availability_status == "red", 1, 0)).label("red"),
+            func.sum(func.if_(ReportItem.availability_status == "yellow", 1, 0)).label("yellow"),
+            func.sum(func.if_(ReportItem.availability_status == "green", 1, 0)).label("green"),
+        )
+        .select_from(Brand)
+        .outerjoin(ReportItem, ReportItem.brand_id == Brand.id)
+        .where(Brand.is_active == True)
+    )).one()
+
+    task_result = (await db.execute(
+        select(
+            func.sum(func.if_(Task.is_resolved == False, 1, 0)).label("open_tasks"),
+            func.sum(func.if_(Task.is_resolved == False, func.if_(Task.is_overdue == True, 1, 0), 0)).label("overdue"),
+        )
+    )).one()
+
     critical = (await db.execute(select(func.count(Insight.id)).where(Insight.severity == "critical"))).scalar() or 0
     anomalies = (await db.execute(select(func.count(AnomalyLog.id)))).scalar() or 0
 
     return {
-        "total_brands": total, "red": red, "yellow": yellow, "green": green,
-        "open_tasks": open_tasks, "overdue_tasks": overdue,
-        "critical_insights": critical, "anomalies": anomalies,
+        "total_brands": status_result.total_brands or 0,
+        "red": status_result.red or 0,
+        "yellow": status_result.yellow or 0,
+        "green": status_result.green or 0,
+        "open_tasks": task_result.open_tasks or 0,
+        "overdue_tasks": task_result.overdue or 0,
+        "critical_insights": critical,
+        "anomalies": anomalies,
     }

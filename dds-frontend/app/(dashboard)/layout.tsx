@@ -4,15 +4,18 @@ import { useRouter, usePathname } from 'next/navigation';
 import {
   Box, Drawer, List, ListItem, ListItemButton, ListItemIcon, ListItemText, AppBar, Toolbar,
   Typography, IconButton, Avatar, Menu, MenuItem, Divider, Badge, Tooltip,
+  Dialog, DialogTitle, DialogContent, DialogActions, TextField, Button, Alert, CircularProgress,
 } from '@mui/material';
 import {
-  Menu as MenuIcon,   Dashboard, Assessment, CloudUpload, People, Settings, Logout,
-  LightMode, DarkMode, Notifications, Inventory2, TaskAlt, Insights as InsightsIcon, AssignmentTurnedIn,
+  Menu as MenuIcon,   Dashboard, Assessment, People, Settings, Logout,
+  LightMode, DarkMode, Notifications, Category, TaskAlt, Insights as InsightsIcon, AssignmentTurnedIn, Preview,
+  Lock,
 } from '@mui/icons-material';
 import { ThemeProvider } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import { createTheme } from '@mui/material/styles';
 import { useAuthStore } from '@/stores/authStore';
+import api from '@/lib/api';
 import { useThemeStore } from '@/stores/themeStore';
 import { useNotificationStore } from '@/stores/notificationStore';
 import SSEProvider from '@/components/common/SSEProvider';
@@ -22,11 +25,11 @@ const DRAWER_WIDTH = 260;
 
 const navItems = [
   { text: 'Dashboard', icon: <Dashboard />, path: '/' },
-  { text: 'Brand/Category', icon: <Inventory2 />, path: '/brands' },
+  { text: 'Brand/Category', icon: <Category />, path: '/brands' },
   { text: 'Reports', icon: <Assessment />, path: '/reports' },
+  { text: 'Review', icon: <Preview />, path: '/review' },
   { text: 'Insights', icon: <InsightsIcon />, path: '/insights' },
   { text: 'Actions', icon: <AssignmentTurnedIn />, path: '/actions' },
-  { text: 'Upload Email', icon: <CloudUpload />, path: '/upload' },
   { text: 'Tasks', icon: <TaskAlt />, path: '/tasks' },
   { text: 'Notifications', icon: <Notifications />, path: '/notifications' },
   { text: 'Users', icon: <People />, path: '/users', adminOnly: true },
@@ -41,6 +44,49 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const { user, logout } = useAuthStore();
   const { mode, toggle } = useThemeStore();
   const { unreadCount } = useNotificationStore();
+
+  const [passwordDialog, setPasswordDialog] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordError, setPasswordError] = useState('');
+  const [changingPass, setChangingPass] = useState(false);
+
+  const validatePassword = (pw: string): string | null => {
+    if (pw.length < 8) return 'Min 8 characters';
+    if (!/[A-Z]/.test(pw)) return 'Need 1 uppercase';
+    if (!/[0-9]/.test(pw)) return 'Need 1 number';
+    if (!/[!@#$%^&*(),.?":{}|<>]/.test(pw)) return 'Need 1 special char';
+    return null;
+  };
+
+  const handleChangePassword = async () => {
+    setPasswordError('');
+    if (newPassword !== confirmPassword) {
+      setPasswordError('Passwords do not match');
+      return;
+    }
+    const v = validatePassword(newPassword);
+    if (v) { setPasswordError(v); return; }
+    setChangingPass(true);
+    try {
+      await api.post('v1/auth/change-password', {
+        current_password: currentPassword,
+        new_password: newPassword,
+      });
+      setPasswordDialog(false);
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      alert('Password changed. You will be logged out.');
+      logout();
+      router.push('/login');
+    } catch (err: any) {
+      setPasswordError(err.response?.data?.detail || 'Failed');
+    } finally {
+      setChangingPass(false);
+    }
+  };
   const theme = createTheme(mode === 'dark' ? darkTheme : lightTheme);
 
   const handleLogout = async () => {
@@ -51,9 +97,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   const drawer = (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <Box sx={{ p: 2.5, display: 'flex', alignItems: 'center', gap: 1.5 }}>
-        <Inventory2 color="primary" />
-        <Typography variant="h6" fontWeight={700}>DDS Platform</Typography>
+      <Box sx={{ p: 2, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, bgcolor: mode === 'dark' ? 'white' : 'transparent', borderRadius: mode === 'dark' ? 1 : 0 }}>
+        <Box component="img" src="/logo.png" alt="A-part" sx={{ height: 'auto', maxHeight: 40, maxWidth: '100%', objectFit: 'contain', display: 'block', mx: 'auto' }} />
+        <Typography variant="h6" fontWeight={700} sx={{ fontSize: '0.95rem', textAlign: 'center', color: mode === 'dark' ? 'black' : 'inherit' }}>
+          DDS Operation
+        </Typography>
       </Box>
       <Divider />
       <List sx={{ flex: 1, px: 1 }}>
@@ -106,9 +154,24 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </IconButton>
             <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={() => setAnchorEl(null)}>
               <MenuItem onClick={() => { setAnchorEl(null); router.push('/settings'); }}><ListItemIcon><Settings fontSize="small" /></ListItemIcon> Settings</MenuItem>
+              <MenuItem onClick={() => { setAnchorEl(null); setPasswordDialog(true); }}><ListItemIcon><Lock fontSize="small" /></ListItemIcon> Change Password</MenuItem>
               <Divider />
               <MenuItem onClick={handleLogout}><ListItemIcon><Logout fontSize="small" /></ListItemIcon> Logout</MenuItem>
             </Menu>
+
+            <Dialog open={passwordDialog} onClose={() => setPasswordDialog(false)} maxWidth="sm" fullWidth>
+              <DialogTitle>Change Password</DialogTitle>
+              <DialogContent>
+                {passwordError && <Alert severity="error" sx={{ mb: 2 }}>{passwordError}</Alert>}
+                <TextField fullWidth label="Current Password" type="password" margin="normal" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} />
+                <TextField fullWidth label="New Password" type="password" margin="normal" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} error={newPassword.length > 0 && !!validatePassword(newPassword)} helperText={newPassword.length > 0 ? validatePassword(newPassword) || 'Min 8 chars, 1 uppercase, 1 number, 1 special char' : 'Min 8 chars, 1 uppercase, 1 number, 1 special char'} />
+                <TextField fullWidth label="Confirm New Password" type="password" margin="normal" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} error={confirmPassword.length > 0 && confirmPassword !== newPassword} helperText={confirmPassword.length > 0 && confirmPassword !== newPassword ? 'Passwords do not match' : ''} />
+              </DialogContent>
+              <DialogActions>
+                <Button onClick={() => setPasswordDialog(false)}>Cancel</Button>
+                <Button variant="contained" disabled={!currentPassword || !newPassword || !confirmPassword || changingPass} startIcon={changingPass ? <CircularProgress size={16} color="inherit" /> : null} onClick={handleChangePassword}>Change Password</Button>
+              </DialogActions>
+            </Dialog>
           </Toolbar>
         </AppBar>
 

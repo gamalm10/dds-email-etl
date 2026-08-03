@@ -11,6 +11,7 @@ from core.models import (
     AvailabilityStatus,
     Brand,
     ClearanceMaterial,
+    FetchedEmail,
     Insight,
     LeadTime,
     Negotiation,
@@ -31,7 +32,7 @@ from services.analytics import AnalyticsEngine
 from services.anomaly import AnomalyDetector
 from services.email_parser import ParsedEmail, parse_email
 from services.extraction import ExtractionResult, extract_email_data
-from services.imap_listener import DDS_SUBJECT_PATTERN, parse_dds_date
+from services.imap_listener import parse_dds_date
 from services.notifier import Notifier
 from services.sidecar_manager import SidecarManager
 
@@ -71,6 +72,8 @@ class Processor:
         self.db.add(report)
         await self.db.flush()
 
+        fetched = await self._track_fetched_email(subject, parsed.sender, received_at, report.id)
+
         try:
             await self._log(report.id, "html_parse", "started", f"Parsed {len(parsed.rows)} rows")
 
@@ -80,6 +83,7 @@ class Processor:
             await self._log(report.id, "llm_extract", "success", f"Extracted {len(extraction.items)} items")
 
             await self._store_report_items(report.id, extraction, parsed)
+            await self._generate_discrepancy_insights(report.id, parsed)
             await self._store_tasks(report.id, extraction)
             await self._store_insights(report.id, extraction)
             await self._store_priority_actions(report.id, extraction)
@@ -101,17 +105,64 @@ class Processor:
             await self._store_enhanced_extractions(report.id, text_body_for_extras)
 
             report.processing_status = ProcessingStatus.completed
+            fetched.processing_status = "completed"
 
         except Exception as e:
             logger.exception(f"Processing failed for report {report.id}")
             report.processing_status = ProcessingStatus.failed
             report.error_message = str(e)
+            fetched.processing_status = "failed"
+            fetched.error_message = str(e)[:500]
             await self._log(report.id, "pipeline", "failed", str(e))
 
         await self.db.commit()
         return report
 
-    async def delete_existing(self, subject: str, report_date: date) -> int | None:
+    async def rebuild_report(self, report_id: int, parsed_email: ParsedEmail) -> Report:
+        report = await self.db.get(Report, report_id)
+        if not report:
+            raise ProcessingError(f"Report {report_id} not found")
+
+        await self.db.execute(text("UPDATE dds_insights SET matched_anomaly_id = NULL WHERE matched_anomaly_id IS NOT NULL"))
+        await self.db.execute(text("DELETE FROM dds_anomaly_log WHERE matched_insight_id IN (SELECT id FROM dds_insights WHERE report_id = :rid)"), {"rid": report_id})
+        await self.db.execute(text("DELETE FROM dds_anomaly_log WHERE source_report_id = :rid OR matched_report_id = :rid"), {"rid": report_id})
+        await self.db.execute(text("UPDATE dds_tasks SET first_seen_report_id = NULL, last_seen_report_id = NULL, resolved_at_report_id = NULL WHERE first_seen_report_id = :rid OR last_seen_report_id = :rid OR resolved_at_report_id = :rid"), {"rid": report_id})
+        for table in ["dds_clearance_materials", "dds_priority_actions", "dds_thread_summaries", "dds_email_images", "dds_signatures", "dds_email_threads", "dds_ordering_rules", "dds_insights", "dds_processing_log", "dds_risk_language", "dds_payment_terms", "dds_negotiations", "dds_lead_times", "dds_percentage_metrics", "dds_status_history"]:
+            await self.db.execute(text(f"DELETE FROM {table} WHERE report_id = :rid"), {"rid": report_id})
+        await self.db.execute(text("DELETE FROM dds_report_items WHERE report_id = :rid"), {"rid": report_id})
+        await self.db.flush()
+
+        if parsed_email.raw_html:
+            report.raw_html = parsed_email.raw_html
+        if parsed_email.raw_text:
+            report.raw_text = parsed_email.raw_text
+        report.processing_status = ProcessingStatus.processing
+
+        for row in parsed_email.rows:
+            if not row.brand_category:
+                continue
+            brand = await self._get_or_create_brand(row.division, row.brand_category)
+            avail_str = row.availability or "unknown"
+            try:
+                avail = AvailabilityStatus(avail_str)
+            except ValueError:
+                avail = AvailabilityStatus.unknown
+            item = ReportItem(
+                report_id=report_id,
+                brand_id=brand.id,
+                availability_status=avail,
+                milestone=row.milestone,
+                milestone_ar=row.milestone_ar,
+                shipment_bis=row.shipment_bis,
+                comments_actions=row.comments,
+                comments_actions_ar=row.comments_ar,
+                language=row.language,
+            )
+            self.db.add(item)
+
+        await self.db.flush()
+        await self.enrich_from_parsed(report_id, parsed_email)
+        return report
         result = await self.db.execute(
             select(Report.id).where(
                 Report.subject == subject,
@@ -124,26 +175,57 @@ class Processor:
             return None
 
         await self.db.execute(text("UPDATE dds_insights SET matched_anomaly_id = NULL WHERE matched_anomaly_id IS NOT NULL"))
+        await self.db.execute(text("DELETE FROM dds_anomaly_log WHERE matched_insight_id IN (SELECT id FROM dds_insights WHERE report_id = :rid)"), {"rid": rid})
+        await self.db.execute(text("DELETE FROM dds_anomaly_log WHERE source_report_id = :rid OR matched_report_id = :rid"), {"rid": rid})
         await self.db.execute(text("UPDATE dds_tasks SET first_seen_report_id = NULL, last_seen_report_id = NULL, resolved_at_report_id = NULL WHERE first_seen_report_id = :rid OR last_seen_report_id = :rid OR resolved_at_report_id = :rid"), {"rid": rid})
         for table in ["dds_clearance_materials", "dds_priority_actions", "dds_thread_summaries", "dds_email_images", "dds_signatures", "dds_email_threads", "dds_ordering_rules", "dds_insights", "dds_processing_log", "dds_risk_language", "dds_payment_terms", "dds_negotiations", "dds_lead_times", "dds_percentage_metrics", "dds_status_history"]:
             await self.db.execute(text(f"DELETE FROM {table} WHERE report_id = :rid"), {"rid": rid})
-        await self.db.execute(text("DELETE FROM dds_anomaly_log WHERE source_report_id = :rid OR matched_report_id = :rid"), {"rid": rid})
         await self.db.execute(text("DELETE FROM dds_report_items WHERE report_id = :rid"), {"rid": rid})
         await self.db.execute(text("DELETE FROM dds_reports WHERE id = :rid"), {"rid": rid})
         await self.db.commit()
         logger.info(f"Deleted existing report #{rid}: {subject[:50]}")
         return rid
 
-    async def _get_previous_context(self, report_date: date) -> str | None:
-        prev = (
+    async def _track_fetched_email(self, subject: str, sender: str, received_at: datetime, report_id: int) -> FetchedEmail:
+        result = await self.db.execute(
+            select(FetchedEmail).where(
+                FetchedEmail.subject == subject,
+                FetchedEmail.sender == sender,
+            ).order_by(FetchedEmail.fetched_at.desc()).limit(1)
+        )
+        fetched = result.scalar_one_or_none()
+        if fetched:
+            fetched.report_id = report_id
+            fetched.processing_status = "processing"
+        else:
+            fetched = FetchedEmail(
+                subject=subject,
+                sender=sender,
+                received_at=received_at,
+                processing_status="processing",
+                report_id=report_id,
+            )
+            self.db.add(fetched)
+        await self.db.flush()
+        return fetched
+
+    async def _get_previous_context(self, report_date: date, max_reports: int = 3) -> str | None:
+        prev_reports = (
             await self.db.execute(
                 select(Report).where(
                     Report.report_date < report_date,
                     Report.processing_status == ProcessingStatus.completed,
-                ).order_by(Report.report_date.desc()).limit(1)
+                ).order_by(Report.report_date.desc()).limit(max_reports)
             )
-        ).scalar_one_or_none()
-        return prev.raw_text[:3000] if prev and prev.raw_text else None
+        ).scalars().all()
+
+        if not prev_reports:
+            return None
+
+        context_parts = []
+        for r in prev_reports:
+            context_parts.append(f"=== Report {r.report_date} ===\n{r.raw_text[:1500]}")
+        return "\n\n".join(context_parts)
 
     async def _store_report_items(self, report_id: int, extraction: ExtractionResult, parsed: ParsedEmail) -> None:
         llm_items = {item["brand_category"]: item for item in extraction.items if item.get("brand_category")}
@@ -276,6 +358,98 @@ class Processor:
                 vendor=ins_data.get("vendor"),
             )
             self.db.add(insight)
+
+    async def _generate_discrepancy_insights(self, report_id: int, parsed: ParsedEmail) -> None:
+        report = await self.db.get(Report, report_id)
+        if not report:
+            return
+
+        prev_report = (
+            await self.db.execute(
+                select(Report).where(
+                    Report.report_date < report.report_date,
+                    Report.processing_status == ProcessingStatus.completed,
+                ).order_by(Report.report_date.desc()).limit(1)
+            )
+        ).scalar_one_or_none()
+
+        prev_items: dict[str, ReportItem] = {}
+        if prev_report:
+            rows = (
+                await self.db.execute(
+                    select(ReportItem, Brand.brand_category)
+                    .join(Brand, ReportItem.brand_id == Brand.id)
+                    .where(ReportItem.report_id == prev_report.id)
+                )
+            ).all()
+            prev_items = {brand_cat: item for item, brand_cat in rows}
+
+        current_items = await self._build_item_brand_map(report_id)
+
+        for brand_cat, item in current_items.items():
+            prev = prev_items.get(brand_cat)
+            curr_status = item.availability_status.value
+
+            if prev:
+                prev_status = prev.availability_status.value
+                if prev_status != curr_status:
+                    severity = "high" if curr_status == "red" else ("info" if curr_status == "green" else "medium")
+                    self.db.add(Insight(
+                        report_id=report_id,
+                        brand_id=item.brand_id,
+                        insight_type="status_change",
+                        description=f"{brand_cat}: availability changed from {prev_status} to {curr_status}",
+                        severity=severity,
+                        recommendation=f"Review {brand_cat} status change – corrective action may be needed in next report",
+                    ))
+
+            if item.availability_status == AvailabilityStatus.unknown:
+                self.db.add(Insight(
+                    report_id=report_id,
+                    brand_id=item.brand_id,
+                    insight_type="missing_status",
+                    description=f"{brand_cat}: no availability status reported",
+                    severity="low",
+                    recommendation=f"Follow up on {brand_cat} status – supplier response needed",
+                ))
+
+        for brand_cat, item in current_items.items():
+            if "-#" not in brand_cat:
+                continue
+            parent_brand = brand_cat.rsplit("-#", 1)[0]
+            parent_item = current_items.get(parent_brand)
+            if not parent_item:
+                continue
+            if not item.comments_actions:
+                continue
+            if parent_item.comments_actions and parent_item.comments_actions == item.comments_actions:
+                self.db.add(Insight(
+                    report_id=report_id,
+                    brand_id=item.brand_id,
+                    insight_type="multi_etd_inherited_comments",
+                    description=f"{brand_cat}: ETD entry shares comments from parent row",
+                    severity="info",
+                    recommendation=f"Verify {brand_cat} has specific comments or corrective action",
+                ))
+
+        for brand_name, note in parsed.future_etd_notes:
+            brand = await self._find_brand(brand_name)
+            if brand:
+                self.db.add(Insight(
+                    report_id=report_id,
+                    brand_id=brand.id,
+                    insight_type="future_etd_no_date",
+                    description=f"{brand_name}: future ETD '{note}' has no date range",
+                    severity="info",
+                    recommendation=f"Track {brand_name} future ETD '{note}' for next order cycle",
+                ))
+
+    async def _find_brand(self, brand_category: str) -> Brand | None:
+        return (
+            await self.db.execute(
+                select(Brand).where(Brand.brand_category == brand_category)
+            )
+        ).scalar_one_or_none()
 
     async def _store_priority_actions(self, report_id: int, extraction: ExtractionResult) -> None:
         actions_raw = extraction.raw.get("priority_actions", [])
@@ -419,10 +593,7 @@ class Processor:
             ))
 
     async def store_from_parsed(self, parsed_email: ParsedEmail, subject: str, sender: str, received_at: datetime | date) -> Report:
-        report_date = None
-        match = DDS_SUBJECT_PATTERN.search(subject)
-        if match:
-            report_date = date(int(match.group(3)), int(match.group(2)), int(match.group(1)))
+        report_date = parse_dds_date(subject)
 
         if isinstance(received_at, datetime):
             default_date = received_at.date()
@@ -442,6 +613,8 @@ class Processor:
         )
         self.db.add(report)
         await self.db.flush()
+
+        await self._track_fetched_email(subject, sender, received_dt, report.id)
 
         for row in parsed_email.rows:
             brand = await self._get_or_create_brand(row.division, row.brand_category)
@@ -471,8 +644,91 @@ class Processor:
 
         log = ProcessingLog(report_id=report.id, step="store_parsed", status="success", message=f"Stored {len(parsed_email.rows)} items from chain email")
         self.db.add(log)
+
+        fetched = (await self.db.execute(
+            select(FetchedEmail).where(FetchedEmail.subject == subject, FetchedEmail.sender == sender)
+            .order_by(FetchedEmail.fetched_at.desc()).limit(1)
+        )).scalar_one_or_none()
+        if fetched:
+            fetched.processing_status = "completed"
+
         await self.db.commit()
         return report
+
+    async def enrich_from_parsed(self, report_id: int, parsed_email: ParsedEmail) -> None:
+        report = await self.db.get(Report, report_id)
+        if not report:
+            raise ProcessingError(f"Report {report_id} not found")
+
+        try:
+            report.processing_status = ProcessingStatus.processing
+            await self.db.flush()
+
+            await self._log(report_id, "enrich", "started", f"Enriching report with LLM extraction on {len(parsed_email.rows)} rows")
+
+            previous_context = await self._get_previous_context(report.report_date)
+            extraction = await extract_email_data(parsed_email, self.sidecar, previous_context)
+            await self._log(report_id, "llm_extract", "success", f"Extracted {len(extraction.items)} items")
+
+            await self._update_report_items(report_id, extraction, parsed_email)
+            await self._generate_discrepancy_insights(report_id, parsed_email)
+            await self._store_tasks(report_id, extraction)
+            await self._store_insights(report_id, extraction)
+            await self._store_priority_actions(report_id, extraction)
+            await self._store_thread_summary(report_id, extraction)
+
+            histories = await self.analytics.compute_status_history(report_id)
+            carried = await self.analytics.carry_over_tasks(report_id)
+            await self._log(report_id, "analytics", "success", f"History: {len(histories)}, carried: {carried}")
+
+            anomalies = await self.anomaly.process_insight_embeddings(report_id)
+            if anomalies:
+                await self._log(report_id, "anomaly", "success", f"Detected {len(anomalies)} anomalies")
+
+            notified = await self.notifier.check_and_notify(report_id)
+            if notified:
+                await self._log(report_id, "notification", "success", f"Sent {len(notified)} alerts")
+
+            text_body = (parsed_email.raw_text or "")
+            await self._store_enhanced_extractions(report_id, text_body)
+
+            report.processing_status = ProcessingStatus.completed
+
+        except Exception as e:
+            logger.exception(f"Enrichment failed for report {report_id}")
+            report.processing_status = ProcessingStatus.failed
+            report.error_message = str(e)
+            await self._log(report_id, "enrich", "failed", str(e))
+
+        await self.db.commit()
+
+    async def _update_report_items(self, report_id: int, extraction: ExtractionResult, parsed: ParsedEmail) -> None:
+        llm_items = {item["brand_category"]: item for item in extraction.items if item.get("brand_category")}
+        items = await self._build_item_brand_map(report_id)
+
+        for brand_cat, item in items.items():
+            llm_data = llm_items.get(brand_cat, {})
+            row_data = next((r for r in parsed.rows if r.brand_category == brand_cat), None)
+
+            avail_str = llm_data.get("availability") or (row_data.availability if row_data else "") or "unknown"
+            try:
+                avail = AvailabilityStatus(avail_str)
+            except ValueError:
+                avail = AvailabilityStatus.unknown
+
+            def _s(val, fallback):
+                return val if val is not None and val != "" else (fallback or "")
+
+            item.availability_status = avail
+            item.vendor = _s(llm_data.get("vendor"), item.vendor or "")
+            item.milestone = _s(llm_data.get("milestone"), item.milestone)
+            item.milestone_ar = _s(llm_data.get("milestone_ar"), item.milestone_ar or "")
+            item.shipment_bis = _s(llm_data.get("shipment_bis"), item.shipment_bis or "")
+            item.comments_actions = _s(llm_data.get("comments_actions"), item.comments_actions)
+            item.comments_actions_ar = _s(llm_data.get("comments_actions_ar"), item.comments_actions_ar or "")
+            item.quantity_text = _s(llm_data.get("quantity_text"), item.quantity_text or "")
+            item.financial_text = _s(llm_data.get("financial_text"), item.financial_text or "")
+            item.language = _s(llm_data.get("language"), item.language)
 
     async def _log(self, report_id: int, step: str, status: str, message: str) -> None:
         log = ProcessingLog(report_id=report_id, step=step, status=status, message=message)

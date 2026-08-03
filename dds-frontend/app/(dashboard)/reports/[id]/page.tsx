@@ -151,6 +151,8 @@ export default function ReportDetailPage() {
                     <TableCell>Vendor</TableCell>
                     <TableCell>Milestone</TableCell>
                     <TableCell>Shipment</TableCell>
+                    <TableCell>Comments</TableCell>
+                    <TableCell>Comments (AR)</TableCell>
                     <TableCell>Qty</TableCell>
                     <TableCell>Financial</TableCell>
                   </TableRow>
@@ -166,6 +168,12 @@ export default function ReportDetailPage() {
                       <TableCell>{item.vendor || '-'}</TableCell>
                       <TableCell>{item.milestone || '-'}</TableCell>
                       <TableCell>{item.shipment_bis || '-'}</TableCell>
+                      <TableCell sx={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {item.comments_actions || '-'}
+                      </TableCell>
+                      <TableCell dir="rtl" sx={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'Segoe UI, Tahoma, sans-serif', textAlign: 'right' }}>
+                        {item.comments_actions_ar || '—'}
+                      </TableCell>
                       <TableCell>{item.quantity_text || '-'}</TableCell>
                       <TableCell>{item.financial_text || '-'}</TableCell>
                     </TableRow>
@@ -235,6 +243,7 @@ export default function ReportDetailPage() {
                   <TableRow>
                     <TableCell>Person</TableCell>
                     <TableCell>Action</TableCell>
+                    <TableCell>Action (AR)</TableCell>
                     <TableCell>Category</TableCell>
                     <TableCell>Urgency</TableCell>
                   </TableRow>
@@ -244,12 +253,15 @@ export default function ReportDetailPage() {
                     <TableRow key={a.id} hover sx={{ cursor: 'pointer' }} onClick={() => router.push(`/actions/${a.id}`)}>
                       <TableCell><Chip label={a.person} size="small" color="primary" variant="outlined" /></TableCell>
                       <TableCell>{a.action}</TableCell>
+                      <TableCell dir="rtl" style={{ fontFamily: 'Segoe UI, Tahoma, sans-serif', textAlign: 'right' }}>
+                        {a.action_ar || '—'}
+                      </TableCell>
                       <TableCell>{a.category || '-'}</TableCell>
                       <TableCell><Chip label={a.urgency || 'medium'} size="small" color={a.urgency === 'high' ? 'error' : a.urgency === 'low' ? 'default' : 'warning'} /></TableCell>
                     </TableRow>
                   ))}
                   {report.priority_actions.length === 0 && (
-                    <TableRow><TableCell colSpan={4} align="center">No priority actions extracted</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={5} align="center">No priority actions extracted</TableCell></TableRow>
                   )}
                 </TableBody>
               </Table>
@@ -441,7 +453,7 @@ export default function ReportDetailPage() {
           </Box>
         )}
       </Card>
-      <OriginalEmailModal open={originalOpen} reportId={Number(params.id)} onClose={() => setOriginalOpen(false)} />
+      <OriginalEmailModal open={originalOpen} reportId={Number(params.id)} itemCount={report?.items?.length || 0} onClose={() => setOriginalOpen(false)} />
     </Box>
   );
 }

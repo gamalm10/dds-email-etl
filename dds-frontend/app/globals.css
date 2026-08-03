@@ -23,3 +23,14 @@ a {
   color: inherit;
   text-decoration: none;
 }
+
+[dir="rtl"] {
+  direction: rtl;
+  text-align: right;
+}
+
+.arabic-text {
+  font-family: 'Segoe UI', 'Tahoma', 'Arial', sans-serif;
+  direction: rtl;
+  unicode-bidi: plaintext;
+}

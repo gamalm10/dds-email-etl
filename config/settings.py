@@ -3,10 +3,12 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    imap_host: str = "imap.example.com"
+    imap_host: str = "imap.gmail.com"
     imap_port: int = 993
     imap_user: str = ""
     imap_password: str = ""
+
+    email_sender_filter: str = ""
 
     maria_host: str = "localhost"
     maria_port: int = 3306
@@ -27,7 +29,7 @@ class Settings(BaseSettings):
 
     @property
     def maria_dsn(self) -> str:
-        return f"mysql+aiomysql://{self.maria_user}:{self.maria_password}@{self.maria_host}:{self.maria_port}/{self.maria_database}"
+        return f"mysql+aiomysql://{self.maria_user}:{self.maria_password}@{self.maria_host}:{self.maria_port}/{self.maria_database}?charset=utf8mb4"
 
     @property
     def notify_recipient_list(self) -> list[str]:
