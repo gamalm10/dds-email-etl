@@ -6,6 +6,7 @@ __pycache__/
 .DS_Store
 .env
 pi/node_modules/
+dds-frontend/node_modules/
 .next/
 *.tsbuildinfo
 
