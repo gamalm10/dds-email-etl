@@ -1,6 +1,6 @@
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.models import (
@@ -22,6 +22,10 @@ class AnalyticsEngine:
         report = await self.db.get(Report, report_id)
         if not report:
             return []
+
+        await self.db.execute(
+            delete(StatusHistory).where(StatusHistory.report_id == report_id)
+        )
 
         prev_report: Report | None = (
             await self.db.execute(

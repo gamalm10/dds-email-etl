@@ -8,6 +8,7 @@ import {
 import { ArrowBack, Refresh } from '@mui/icons-material';
 import api from '@/lib/api';
 import InsightTimeline from '@/components/insights/InsightTimeline';
+import ReportTimeline from '@/components/vendors/ReportTimeline';
 
 export default function BrandDetailPage() {
   const params = useParams();
@@ -16,6 +17,7 @@ export default function BrandDetailPage() {
   const [history, setHistory] = useState<any[]>([]);
   const [timeline, setTimeline] = useState<any[]>([]);
   const [insightTimeline, setInsightTimeline] = useState<any[]>([]);
+  const [overview, setOverview] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState(0);
 
@@ -23,16 +25,18 @@ export default function BrandDetailPage() {
     setLoading(true);
     try {
       const id = params.id as string;
-      const [dRes, hRes, tRes, itRes] = await Promise.all([
+      const [dRes, hRes, tRes, itRes, oRes] = await Promise.all([
         api.get(`v1/brands/${id}/details`).then(({ data }) => data || {}).catch(() => ({})),
         api.get(`v1/brands/${id}/history`).then(({ data }) => data || {}).catch(() => ({})),
         api.get(`v1/brands/${id}/timeline`).then(({ data }) => data || []).catch(() => []),
         api.get(`v1/brands/${id}/insights/timeline`).then(({ data }) => data || []).catch(() => []),
+        api.get(`v1/brands/${id}/overview`).then(({ data }) => data || {}).catch(() => ({})),
       ]);
       setData(dRes || {});
       setHistory(Array.isArray(hRes?.history) ? hRes.history : []);
       setTimeline(Array.isArray(tRes) ? tRes : []);
       setInsightTimeline(Array.isArray(itRes) ? itRes : []);
+      setOverview(oRes || {});
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
   };
@@ -85,21 +89,11 @@ export default function BrandDetailPage() {
             <Grid container spacing={2} mb={3}>
               <Grid item xs={6} md={3}><Typography variant="caption">Brand/Category</Typography><Typography variant="body2" fontWeight={600}>{brand.brand_category}</Typography></Grid>
               <Grid item xs={6} md={3}><Typography variant="caption">Division</Typography><Typography variant="body2">{brand.division}</Typography></Grid>
-              <Grid item xs={6} md={3}><Typography variant="caption">Reports</Typography><Typography variant="h6">{data.report_count}</Typography></Grid>
-              <Grid item xs={6} md={3}><Typography variant="caption">Open Tasks</Typography><Typography variant="h6">{data.tasks.filter((t:any) => !t.is_resolved).length}</Typography></Grid>
+              <Grid item xs={6} md={3}><Typography variant="caption">Reports</Typography><Typography variant="h6">{overview?.stats?.report_count ?? data.report_count}</Typography></Grid>
+              <Grid item xs={6} md={3}><Typography variant="caption">Open Tasks</Typography><Typography variant="h6">{overview?.stats?.open_tasks ?? data.tasks.filter((t:any) => !t.is_resolved).length}</Typography></Grid>
             </Grid>
-            {data.items.length > 0 && (
-              <Paper variant="outlined" sx={{ p: 2 }}>
-                <Typography variant="subtitle2" gutterBottom>Latest Report Item</Typography>
-                <Grid container spacing={1}>
-                  <Grid item xs={4}><Typography variant="caption">Status:</Typography> <Chip label={data.items[0].availability_status} size="small" sx={{ bgcolor: getStatusColor(data.items[0].availability_status), color: 'white' }} /></Grid>
-                  <Grid item xs={4}><Typography variant="caption">Milestone:</Typography> {data.items[0].milestone || '-'}</Grid>
-                  <Grid item xs={4}><Typography variant="caption">Vendor:</Typography> {data.items[0].vendor || '-'}</Grid>
-                  <Grid item xs={12}><Typography variant="caption">Shipment:</Typography> {data.items[0].shipment_bis || '-'}</Grid>
-                  <Grid item xs={12}><Typography variant="caption">Comments:</Typography> {data.items[0].comments_actions || '-'}</Grid>
-                </Grid>
-              </Paper>
-            )}
+            <Typography variant="subtitle1" fontWeight={600} gutterBottom>Report Overview</Typography>
+            <ReportTimeline reports={overview?.reports || []} />
           </Box>
         )}
 

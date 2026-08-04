@@ -9,7 +9,7 @@ import {
 import {
   Menu as MenuIcon,   Dashboard, Assessment, People, Settings, Logout,
   LightMode, DarkMode, Notifications, Category, TaskAlt, Insights as InsightsIcon, AssignmentTurnedIn, Preview,
-  Lock,
+  Lock, Store,
 } from '@mui/icons-material';
 import { ThemeProvider } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
@@ -25,6 +25,7 @@ const DRAWER_WIDTH = 260;
 
 const navItems = [
   { text: 'Dashboard', icon: <Dashboard />, path: '/' },
+  { text: 'Vendors', icon: <Store />, path: '/vendors' },
   { text: 'Brand/Category', icon: <Category />, path: '/brands' },
   { text: 'Reports', icon: <Assessment />, path: '/reports' },
   { text: 'Review', icon: <Preview />, path: '/review' },

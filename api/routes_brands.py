@@ -1,10 +1,17 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
+from api.overview_builder import build_overview
 from core.database import get_db
-from core.models import Brand, ReportItem, Report, Task, Insight, PaymentTerm, RiskLanguage, LeadTime, Negotiation, StatusHistory, AnomalyLog
+from core.models import (
+    Brand,
+    Insight,
+    PaymentTerm,
+    Report,
+    ReportItem,
+    Task,
+)
 
 router = APIRouter(prefix="/api/v1/brands", tags=["Brands"])
 
@@ -92,11 +99,6 @@ async def brand_details(brand_id: int, db: AsyncSession = Depends(get_db)):
     tasks = []
     insights = []
     payments = []
-    risks = []
-    leads = []
-    negos = []
-    anomalies = []
-    status_changes = []
 
     if item_ids:
         tasks = (await db.execute(
@@ -109,18 +111,6 @@ async def brand_details(brand_id: int, db: AsyncSession = Depends(get_db)):
         )).scalars().all()
         payments = (await db.execute(
             select(PaymentTerm).where(PaymentTerm.brand_id == brand_id, PaymentTerm.report_id.in_(report_ids))
-        )).scalars().all()
-        risks = (await db.execute(
-            select(RiskLanguage).where(RiskLanguage.brand_id == brand_id, RiskLanguage.report_id.in_(report_ids))
-        )).scalars().all()
-        leads = (await db.execute(
-            select(LeadTime).where(LeadTime.brand_id == brand_id, LeadTime.report_id.in_(report_ids))
-        )).scalars().all()
-        negos = (await db.execute(
-            select(Negotiation).where(Negotiation.brand_id == brand_id, Negotiation.report_id.in_(report_ids))
-        )).scalars().all()
-        status_changes = (await db.execute(
-            select(StatusHistory).where(StatusHistory.brand_id == brand_id, StatusHistory.report_id.in_(report_ids))
         )).scalars().all()
 
     return {
@@ -155,3 +145,25 @@ async def brand_insights_timeline(brand_id: int, db: AsyncSession = Depends(get_
             "subject": r[9],
         })
     return timeline
+
+
+@router.get("/{brand_id}/overview")
+async def brand_overview(brand_id: int, db: AsyncSession = Depends(get_db)):
+    brand = await db.get(Brand, brand_id)
+    if not brand:
+        raise HTTPException(404, "Brand not found")
+
+    items = (await db.execute(
+        select(ReportItem, Brand, Report)
+        .join(Brand, ReportItem.brand_id == Brand.id)
+        .join(Report, ReportItem.report_id == Report.id)
+        .where(ReportItem.brand_id == brand_id)
+        .order_by(Report.report_date.desc())
+    )).all()
+
+    overview = await build_overview(db, items)
+
+    return {
+        "brand": {"id": brand.id, "division": brand.division, "brand_category": brand.brand_category},
+        **overview,
+    }

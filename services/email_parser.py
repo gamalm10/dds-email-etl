@@ -478,7 +478,15 @@ def parse_risk_language(text: str) -> list[dict]:
                 "severity_score": score,
                 "context": context[:500],
             })
-    return risks
+    seen = set()
+    deduped = []
+    for r in risks:
+        key = (r["phrase"].lower(), r["category"], r["severity_score"])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(r)
+    return deduped
 
 
 def parse_payment_terms(text: str) -> list[dict]:
@@ -518,7 +526,15 @@ def parse_negotiations(text: str) -> list[dict]:
             "status": "proposed",
             "raw_text": m.group(0),
         })
-    return negos
+    seen = set()
+    deduped = []
+    for n in negos:
+        key = (n["type"], n["percentage"], n["status"])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(n)
+    return deduped
 
 
 def parse_lead_times(text: str) -> list[dict]:
@@ -535,4 +551,12 @@ def parse_lead_times(text: str) -> list[dict]:
             "status": "current",
             "raw_text": m.group(0),
         })
-    return leads
+    seen = set()
+    deduped = []
+    for l in leads:
+        key = (l["days"], l["status"])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(l)
+    return deduped
