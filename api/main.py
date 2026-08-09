@@ -9,6 +9,7 @@ from api.routes import router, set_sidecar
 from api.routes_actions import router as actions_router
 from api.routes_auth_reset import router as auth_reset_router
 from api.routes_brands import router as brands_router
+from api.routes_chat import router as chat_router
 from api.routes_dashboard import router as dashboard_router
 from api.routes_users import router as users_router
 from api.routes_vendors import router as vendors_router
@@ -74,6 +75,7 @@ app.include_router(dashboard_router)
 app.include_router(actions_router)
 app.include_router(users_router)
 app.include_router(vendors_router)
+app.include_router(chat_router)
 
 
 @app.get("/health")
