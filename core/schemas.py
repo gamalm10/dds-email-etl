@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class BrandOut(BaseModel):
@@ -55,6 +55,9 @@ class ReportItemOut(BaseModel):
     milestone: str | None = None
     milestone_ar: str | None = None
     shipment_bis: str | None = None
+    etd: str | None = None
+    eta: str | None = None
+    ready_for_sale: str | None = None
     comments_actions: str | None = None
     comments_actions_ar: str | None = None
     quantity_text: str | None = None
@@ -270,3 +273,32 @@ class ProcessResponse(BaseModel):
     items_extracted: int = 0
     tasks_extracted: int = 0
     insights_generated: int = 0
+
+
+# --- Chat Schemas ---
+
+
+class ChatMessageCreate(BaseModel):
+    content: str
+    report_id: int | None = None
+
+
+class ChatMessageOut(BaseModel):
+    id: int
+    role: str
+    content: str
+    citations: list[dict] | None = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ChatConversationOut(BaseModel):
+    id: int
+    report_id: int | None = None
+    title: str | None = None
+    created_at: datetime
+    updated_at: datetime | None = None
+    message_count: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
