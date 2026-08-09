@@ -19,6 +19,7 @@ import api from '@/lib/api';
 import { useThemeStore } from '@/stores/themeStore';
 import { useNotificationStore } from '@/stores/notificationStore';
 import SSEProvider from '@/components/common/SSEProvider';
+import ChatPanel from '@/components/chat/ChatPanel';
 import { lightTheme, darkTheme } from '@/lib/theme';
 
 const DRAWER_WIDTH = 260;
@@ -189,6 +190,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <Box component="main" sx={{ flexGrow: 1, p: 3, mt: 8, bgcolor: 'background.default', minHeight: '100vh' }}>
           <SSEProvider>{children}</SSEProvider>
         </Box>
+        <ChatPanel />
       </Box>
     </ThemeProvider>
   );
