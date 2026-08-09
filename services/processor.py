@@ -29,6 +29,7 @@ from core.models import (
     ThreadSummary,
 )
 from services.analytics import AnalyticsEngine
+from services.embedding_service import embed_report
 from services.anomaly import AnomalyDetector
 from services.email_parser import ParsedEmail, parse_email
 from services.extraction import ExtractionResult, extract_email_data
@@ -102,7 +103,7 @@ class Processor:
                 await self._log(report.id, "notification", "success", f"Sent {len(notified)} alerts")
 
             text_body_for_extras = (parsed.raw_text or parsed.raw_html or "")
-            await self._store_enhanced_extractions(report.id, text_body_for_extras)
+            await self._store_enhanced_extractions(report.id, text_body_for_extras, extraction)
 
             report.processing_status = ProcessingStatus.completed
             fetched.processing_status = "completed"
@@ -116,6 +117,13 @@ class Processor:
             await self._log(report.id, "pipeline", "failed", str(e))
 
         await self.db.commit()
+
+        if report.processing_status == ProcessingStatus.completed:
+            try:
+                await embed_report(self.db, report.id)
+            except Exception as e:
+                logger.warning(f"Embedding failed for report {report.id}: {e}")
+
         return report
 
     async def rebuild_report(self, report_id: int, parsed_email: ParsedEmail) -> Report:
@@ -154,6 +162,9 @@ class Processor:
                 milestone=row.milestone,
                 milestone_ar=row.milestone_ar,
                 shipment_bis=row.shipment_bis,
+                etd=row.etd,
+                eta=row.eta,
+                ready_for_sale=row.ready_for_sale,
                 comments_actions=row.comments,
                 comments_actions_ar=row.comments_ar,
                 language=row.language,
@@ -253,6 +264,9 @@ class Processor:
                 milestone=_s(llm_data.get("milestone"), row.milestone),
                 milestone_ar=_s(llm_data.get("milestone_ar"), row.milestone_ar),
                 shipment_bis=_s(llm_data.get("shipment_bis"), row.shipment_bis),
+                etd=_s(llm_data.get("etd"), row.etd),
+                eta=_s(llm_data.get("eta"), row.eta),
+                ready_for_sale=_s(llm_data.get("ready_for_sale"), row.ready_for_sale),
                 comments_actions=_s(llm_data.get("comments_actions"), row.comments),
                 comments_actions_ar=_s(llm_data.get("comments_actions_ar"), row.comments_ar),
                 quantity_text=_s(llm_data.get("quantity_text"), ""),
@@ -453,10 +467,48 @@ class Processor:
 
     async def _store_priority_actions(self, report_id: int, extraction: ExtractionResult) -> None:
         actions_raw = extraction.raw.get("priority_actions", [])
+        items = await self._build_item_brand_map(report_id)
+
+        brand_names = sorted(items.keys(), key=len, reverse=True)
+        vendor_names = []
+        if brand_names:
+            vendor_names = sorted(
+                {it.vendor for it in items.values() if it.vendor},
+                key=len, reverse=True,
+            )
+
+        def _match_brand(action_text: str) -> int | None:
+            text = action_text.lower()
+            hits = set()
+            for name in brand_names:
+                if name and name.lower() in text:
+                    item = items[name]
+                    hits.add(item.brand_id)
+            for vendor in vendor_names:
+                if vendor and vendor.lower() in text:
+                    for it in items.values():
+                        if it.vendor == vendor:
+                            hits.add(it.brand_id)
+            if len(hits) == 1:
+                return next(iter(hits))
+            return None
+
         for pa in actions_raw:
             action_ar = pa.get("action_ar", "")
+            brand_id = None
+            brand_cat = pa.get("brand_category")
+            if brand_cat:
+                item = items.get(brand_cat)
+                if item:
+                    brand_id = item.brand_id
+                else:
+                    brand = await self._find_brand(brand_cat)
+                    brand_id = brand.id if brand else None
+            if brand_id is None:
+                brand_id = _match_brand(pa.get("action", ""))
             action = PriorityAction(
                 report_id=report_id,
+                brand_id=brand_id,
                 person=pa.get("person", ""),
                 action=pa.get("action", ""),
                 action_ar=action_ar if action_ar else None,
@@ -479,7 +531,16 @@ class Processor:
         )
         self.db.add(summary)
 
-    async def _store_enhanced_extractions(self, report_id: int, text_body: str, brand_map: dict[str, int] | None = None) -> None:
+    async def _resolve_brand_id(self, brand_cat: str | None, items: dict[str, ReportItem]) -> int | None:
+        if not brand_cat:
+            return None
+        item = items.get(brand_cat)
+        if item:
+            return item.brand_id
+        brand = await self._find_brand(brand_cat)
+        return brand.id if brand else None
+
+    async def _store_enhanced_extractions(self, report_id: int, text_body: str, extraction: ExtractionResult | None = None) -> None:
         from services.email_parser import (
             parse_clearance_materials,
             parse_ordering_rules,
@@ -490,6 +551,9 @@ class Processor:
             parse_negotiations,
             parse_lead_times,
         )
+
+        items = await self._build_item_brand_map(report_id)
+        brand_map = {cat: item.brand_id for cat, item in items.items()}
 
         materials = parse_clearance_materials(text_body)
         for m in materials:
@@ -539,11 +603,38 @@ class Processor:
                 raw_text=p.get("raw_text"),
             ))
 
-        risks = parse_risk_language(text_body)
+        def _dedupe(rows, keyfn):
+            seen = set()
+            deduped = []
+            for r in rows:
+                key = keyfn(r)
+                if key in seen:
+                    continue
+                seen.add(key)
+                deduped.append(r)
+            return deduped
+
+        def _row_text(item: ReportItem) -> str:
+            return " ".join(x for x in (item.comments_actions, item.milestone, item.shipment_bis) if x)
+
+        raw = extraction.raw if extraction else {}
+
+        stored_risks = []
+        for item in items.values():
+            for r in parse_risk_language(_row_text(item)):
+                r["brand_id"] = item.brand_id
+                stored_risks.append(r)
+        for r in raw.get("risk_language") or []:
+            bid = await self._resolve_brand_id(r.get("brand_category"), items)
+            if bid:
+                r["brand_id"] = bid
+                stored_risks.append(r)
+        risks = _dedupe(stored_risks, lambda r: (r.get("brand_id"), (r.get("phrase") or "").strip().lower(), r.get("category"), r.get("severity_score")))
         risk_score = sum(r["severity_score"] for r in risks)
         for r in risks:
             self.db.add(RiskLanguage(
                 report_id=report_id,
+                brand_id=r.get("brand_id"),
                 phrase=r.get("phrase"),
                 category=r.get("category"),
                 severity_score=r.get("severity_score", 0),
@@ -555,7 +646,17 @@ class Processor:
             high_risks = [r for r in risks if r.get("severity_score", 0) >= 3]
             report.risk_category = max(set(r["category"] for r in high_risks), key=lambda c: sum(1 for r in high_risks if r["category"] == c)) if high_risks else "low"
 
-        terms = parse_payment_terms(text_body)
+        stored_terms = []
+        for item in items.values():
+            for t in parse_payment_terms(_row_text(item)):
+                t["brand_id"] = item.brand_id
+                stored_terms.append(t)
+        for t in raw.get("payment_terms") or []:
+            bid = await self._resolve_brand_id(t.get("brand_category"), items)
+            if bid:
+                t["brand_id"] = bid
+                stored_terms.append(t)
+        terms = _dedupe(stored_terms, lambda t: (t.get("brand_id"), t.get("payment_method"), t.get("deposit_pct"), t.get("balance_pct")))
         for t in terms:
             expected = None
             if t.get("expected_date"):
@@ -566,6 +667,7 @@ class Processor:
                     pass
             self.db.add(PaymentTerm(
                 report_id=report_id,
+                brand_id=t.get("brand_id"),
                 payment_method=t.get("payment_method"),
                 deposit_pct=t.get("deposit_pct"),
                 balance_pct=t.get("balance_pct"),
@@ -573,20 +675,42 @@ class Processor:
                 raw_text=t.get("raw_text"),
             ))
 
-        negos = parse_negotiations(text_body)
+        stored_negos = []
+        for item in items.values():
+            for n in parse_negotiations(_row_text(item)):
+                n["brand_id"] = item.brand_id
+                stored_negos.append(n)
+        for n in raw.get("negotiations") or []:
+            bid = await self._resolve_brand_id(n.get("brand_category"), items)
+            if bid:
+                n["brand_id"] = bid
+                stored_negos.append(n)
+        negos = _dedupe(stored_negos, lambda n: (n.get("brand_id"), n.get("type"), n.get("status"), n.get("percentage")))
         for n in negos:
             self.db.add(Negotiation(
                 report_id=report_id,
+                brand_id=n.get("brand_id"),
                 type=n.get("type"),
                 percentage=n.get("percentage"),
                 status=n.get("status", "proposed"),
                 raw_text=n.get("raw_text"),
             ))
 
-        leads = parse_lead_times(text_body)
+        stored_leads = []
+        for item in items.values():
+            for l in parse_lead_times(_row_text(item)):
+                l["brand_id"] = item.brand_id
+                stored_leads.append(l)
+        for l in raw.get("lead_times") or []:
+            bid = await self._resolve_brand_id(l.get("brand_category"), items)
+            if bid:
+                l["brand_id"] = bid
+                stored_leads.append(l)
+        leads = _dedupe(stored_leads, lambda l: (l.get("brand_id"), l.get("days"), l.get("status")))
         for l in leads:
             self.db.add(LeadTime(
                 report_id=report_id,
+                brand_id=l.get("brand_id"),
                 days=l.get("days"),
                 status=l.get("status"),
                 raw_text=l.get("raw_text"),
@@ -630,6 +754,9 @@ class Processor:
                 milestone=row.milestone,
                 milestone_ar=row.milestone_ar,
                 shipment_bis=row.shipment_bis,
+                etd=row.etd,
+                eta=row.eta,
+                ready_for_sale=row.ready_for_sale,
                 comments_actions=row.comments,
                 comments_actions_ar=row.comments_ar,
                 language=row.language,
@@ -690,7 +817,7 @@ class Processor:
                 await self._log(report_id, "notification", "success", f"Sent {len(notified)} alerts")
 
             text_body = (parsed_email.raw_text or "")
-            await self._store_enhanced_extractions(report_id, text_body)
+            await self._store_enhanced_extractions(report_id, text_body, extraction)
 
             report.processing_status = ProcessingStatus.completed
 
