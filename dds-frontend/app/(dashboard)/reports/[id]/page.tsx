@@ -6,7 +6,7 @@ import {
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Accordion, AccordionSummary, AccordionDetails,
 } from '@mui/material';
 import {
-  ArrowBack, Refresh, PictureAsPdf, TableChart, ExpandMore, Delete, Replay,
+  Refresh, PictureAsPdf, TableChart, ExpandMore, Delete, Replay,
   Warning, CheckCircle, Error as ErrorIcon, Schedule, Assignment, Gavel, TrendingUp, Email,
 } from '@mui/icons-material';
 import api from '@/lib/api';
@@ -14,6 +14,8 @@ import InsightCard from '@/components/insights/InsightCard';
 import ExecutiveSummary from '@/components/reports/ExecutiveSummary';
 import DeltaSection from '@/components/reports/DeltaSection';
 import OriginalEmailModal from '@/components/reports/OriginalEmailModal';
+import BackButton from '@/components/common/BackButton';
+import { navigate } from '@/components/common/navigate';
 import { exportReportPDF, exportReportExcel } from '@/lib/export';
 import type { Report, RiskLanguage, PaymentTerm, LeadTime, Negotiation } from '@/types/report';
 
@@ -94,7 +96,7 @@ export default function ReportDetailPage() {
   return (
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3 }}>
-        <IconButton onClick={() => router.push('/reports')}><ArrowBack /></IconButton>
+        <BackButton fallback="/reports" />
         <Box sx={{ flex: 1 }}>
           <Typography variant="h5">{report.subject || `Report #${report.id}`}</Typography>
           <Typography variant="body2" color="text.secondary">
@@ -150,7 +152,9 @@ export default function ReportDetailPage() {
                     <TableCell>Status</TableCell>
                     <TableCell>Vendor</TableCell>
                     <TableCell>Milestone</TableCell>
-                    <TableCell>Shipment</TableCell>
+                    <TableCell>ETD</TableCell>
+                    <TableCell>ETA</TableCell>
+                    <TableCell>Ready for Sale</TableCell>
                     <TableCell>Comments</TableCell>
                     <TableCell>Comments (AR)</TableCell>
                     <TableCell>Qty</TableCell>
@@ -160,14 +164,16 @@ export default function ReportDetailPage() {
                 <TableBody>
                   {report.items.map((item) => (
                     <TableRow key={item.id} hover>
-                      <TableCell sx={{ cursor: 'pointer' }} onClick={() => router.push(`/brands/${item.brand.id}`)}>
+                      <TableCell sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/brands/${item.brand.id}`)}>
                         <Typography variant="body2" fontWeight={600} color="primary">{item.brand.brand_category}</Typography>
                         <Typography variant="caption">{item.brand.division}</Typography>
                       </TableCell>
                       <TableCell><Chip label={item.availability_status} size="small" sx={{ bgcolor: getAvailabilityColor(item.availability_status), color: 'white', minWidth: 60 }} /></TableCell>
                       <TableCell>{item.vendor || '-'}</TableCell>
                       <TableCell>{item.milestone || '-'}</TableCell>
-                      <TableCell>{item.shipment_bis || '-'}</TableCell>
+                      <TableCell>{item.etd || '-'}</TableCell>
+                      <TableCell>{item.eta || '-'}</TableCell>
+                      <TableCell>{item.ready_for_sale || '-'}</TableCell>
                       <TableCell sx={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {item.comments_actions || '-'}
                       </TableCell>
@@ -250,7 +256,7 @@ export default function ReportDetailPage() {
                 </TableHead>
                 <TableBody>
                   {report.priority_actions.map((a) => (
-                    <TableRow key={a.id} hover sx={{ cursor: 'pointer' }} onClick={() => router.push(`/actions/${a.id}`)}>
+                    <TableRow key={a.id} hover sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/actions/${a.id}`)}>
                       <TableCell><Chip label={a.person} size="small" color="primary" variant="outlined" /></TableCell>
                       <TableCell>{a.action}</TableCell>
                       <TableCell dir="rtl" style={{ fontFamily: 'Segoe UI, Tahoma, sans-serif', textAlign: 'right' }}>
@@ -383,7 +389,7 @@ export default function ReportDetailPage() {
                 </TableHead>
                 <TableBody>
                   {report.items.flatMap((item) => item.tasks).slice(0, 30).map((t) => (
-                    <TableRow key={t.id} hover sx={{ cursor: 'pointer' }} onClick={() => router.push(`/tasks/${t.id}`)}>
+                    <TableRow key={t.id} hover sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/tasks/${t.id}`)}>
                       <TableCell>{t.task_description}</TableCell>
                       <TableCell>{t.assigned_to || '-'}</TableCell>
                       <TableCell>{t.task_category || '-'}</TableCell>

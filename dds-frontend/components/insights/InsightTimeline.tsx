@@ -1,6 +1,7 @@
 'use client';
 import { Box, Typography, Chip } from '@mui/material';
 import { useRouter } from 'next/navigation';
+import { navigate } from '@/components/common/navigate';
 
 interface TimelineEvent {
   id: number;
@@ -32,7 +33,7 @@ export default function InsightTimeline({ events }: InsightTimelineProps) {
       {events.map((e, i) => (
         <Box key={e.id} sx={{ display: 'flex', gap: 2, pb: 2, borderLeft: i < events.length - 1 ? '2px solid' : 'none', borderColor: 'primary.main', pl: 2 }}>
           <Box sx={{ width: 12, height: 12, borderRadius: '50%', bgcolor: severityColors[e.severity || 'info'] || '#9E9E9E', mt: 0.5, flexShrink: 0 }} />
-          <Box sx={{ flex: 1, cursor: 'pointer' }} onClick={() => router.push(`/reports/${e.report_id}`)}>
+          <Box sx={{ flex: 1, cursor: 'pointer' }} onClick={() => navigate(router, `/reports/${e.report_id}`)}>
             <Typography variant="caption" color="text.secondary">{e.report_date}</Typography>
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 0.25 }}>
               {e.severity && <Chip label={e.severity} size="small" sx={{ bgcolor: severityColors[e.severity] || '#9E9E9E', color: 'white', height: 18, fontSize: 10 }} />}

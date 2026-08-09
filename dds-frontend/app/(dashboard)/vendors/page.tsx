@@ -5,6 +5,7 @@ import { Box, Typography, Card, TextField, MenuItem, Chip, IconButton } from '@m
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { Refresh } from '@mui/icons-material';
 import api from '@/lib/api';
+import { navigate } from '@/components/common/navigate';
 
 export default function VendorsPage() {
   const router = useRouter();
@@ -70,7 +71,7 @@ export default function VendorsPage() {
       <Card>
         <DataGrid rows={filtered} columns={columns} loading={loading} autoHeight getRowId={(r) => r.vendor}
           pageSizeOptions={[25, 50, 100]} initialState={{ pagination: { paginationModel: { pageSize: 50 } } }}
-          onRowClick={(p) => router.push(`/vendors/${encodeURIComponent(p.row.vendor)}`)}
+          onRowClick={(p) => navigate(router, `/vendors/${encodeURIComponent(p.row.vendor)}`)}
           sx={{ border: 'none', '& .MuiDataGrid-row': { cursor: 'pointer' } }} disableRowSelectionOnClick />
       </Card>
     </Box>

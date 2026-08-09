@@ -8,6 +8,7 @@ import {
   Inventory2, AssignmentLate, Warning, TaskAlt, Refresh,
 } from '@mui/icons-material';
 import api from '@/lib/api';
+import { navigate } from '@/components/common/navigate';
 import type { DashboardSummary, ReportSummary } from '@/types/report';
 
 export default function DashboardPage() {
@@ -85,7 +86,7 @@ export default function DashboardPage() {
               <Typography variant="h6" mb={2}>Recent Reports</Typography>
               {reports.map((r) => (
                 <Box key={r.id} sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 1.5, borderBottom: '1px solid', borderColor: 'divider', cursor: 'pointer' }}
-                  onClick={() => router.push(`/reports/${r.id}`)}>
+                  onClick={() => navigate(router, `/reports/${r.id}`)}>
                   <Chip label={r.processing_status} size="small" sx={{ bgcolor: getStatusColor(r.processing_status), color: 'white', minWidth: 80 }} />
                   <Box sx={{ flex: 1 }}>
                     <Typography variant="body2" fontWeight={600}>{r.subject || `Report #${r.id}`}</Typography>

@@ -5,9 +5,11 @@ import {
   Box, Typography, Card, CardContent, Chip, IconButton, CircularProgress,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper,
 } from '@mui/material';
-import { ArrowBack, Refresh, TrendingUp } from '@mui/icons-material';
+import { Refresh, TrendingUp } from '@mui/icons-material';
 import api from '@/lib/api';
 import ReportTimeline, { getStatusColor } from '@/components/vendors/ReportTimeline';
+import BackButton from '@/components/common/BackButton';
+import { navigate } from '@/components/common/navigate';
 
 export default function VendorOverviewPage() {
   const params = useParams();
@@ -36,7 +38,7 @@ export default function VendorOverviewPage() {
   return (
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3 }}>
-        <IconButton onClick={() => router.push('/vendors')}><ArrowBack /></IconButton>
+        <BackButton fallback="/vendors" />
         <Box sx={{ flex: 1 }}>
           <Typography variant="h5">{data.vendor}</Typography>
           <Typography variant="body2" color="text.secondary">{data.brands?.length || 0} brands · {stats.report_count} reports</Typography>
@@ -72,7 +74,7 @@ export default function VendorOverviewPage() {
                 </TableHead>
                 <TableBody>
                   {data.brands.map((b: any) => (
-                    <TableRow key={b.brand_id} hover sx={{ cursor: 'pointer' }} onClick={() => router.push(`/brands/${b.brand_id}`)}>
+                    <TableRow key={b.brand_id} hover sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/brands/${b.brand_id}`)}>
                       <TableCell>{b.brand_category}</TableCell>
                       <TableCell>{b.division || '-'}</TableCell>
                       <TableCell>{b.count}</TableCell>
@@ -87,7 +89,7 @@ export default function VendorOverviewPage() {
       )}
 
       <Typography variant="h6" gutterBottom>Report Timeline</Typography>
-      <ReportTimeline reports={data.reports} />
+      <ReportTimeline reports={data.reports} onReprocessed={fetchAll} />
     </Box>
   );
 }

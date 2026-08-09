@@ -34,6 +34,9 @@ export interface ReportItem {
   milestone: string | null;
   milestone_ar: string | null;
   shipment_bis: string | null;
+  etd: string | null;
+  eta: string | null;
+  ready_for_sale: string | null;
   comments_actions: string | null;
   comments_actions_ar: string | null;
   quantity_text: string | null;

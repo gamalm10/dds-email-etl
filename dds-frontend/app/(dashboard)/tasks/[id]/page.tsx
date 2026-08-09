@@ -2,8 +2,10 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Box, Typography, Card, CardContent, Chip, IconButton, CircularProgress, Grid, Paper, Table, TableBody, TableCell, TableContainer, TableHead, TableRow } from '@mui/material';
-import { ArrowBack, Refresh } from '@mui/icons-material';
+import { Refresh } from '@mui/icons-material';
 import api from '@/lib/api';
+import BackButton from '@/components/common/BackButton';
+import { navigate } from '@/components/common/navigate';
 
 export default function TaskDetailPage() {
   const params = useParams();
@@ -31,9 +33,9 @@ export default function TaskDetailPage() {
   return (
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3 }}>
-        <IconButton onClick={() => router.push('/tasks')}><ArrowBack /></IconButton>
+        <BackButton fallback="/tasks" />
         <Box sx={{ flex: 1 }}><Typography variant="h5">{t.description}</Typography>
-          {b?.brand_category && <Typography variant="body2" color="text.secondary" sx={{ cursor: 'pointer', color: 'primary.main' }} onClick={() => router.push(`/brands/${b.id}`)}>{b.division} / {b.brand_category}</Typography>}
+          {b?.brand_category && <Typography variant="body2" color="text.secondary" sx={{ cursor: 'pointer', color: 'primary.main' }} onClick={() => navigate(router, `/brands/${b.id}`)}>{b.division} / {b.brand_category}</Typography>}
         </Box>
         <IconButton onClick={fetch}><Refresh /></IconButton>
       </Box>
@@ -53,7 +55,7 @@ export default function TaskDetailPage() {
         <Grid item xs={6} md={3}><Typography variant="caption">Request Date</Typography><Typography variant="body2">{t.request_date || '-'}</Typography></Grid>
         <Grid item xs={6} md={3}><Typography variant="caption">Deadline</Typography><Typography variant="body2">{t.deadline || t.deadline_text || '-'}</Typography></Grid>
         <Grid item xs={6} md={3}><Typography variant="caption">Category</Typography><Typography variant="body2">{t.category || '-'}</Typography></Grid>
-        <Grid item xs={6} md={3}><Typography variant="caption">Brand/Category</Typography><Typography variant="body2" sx={{ cursor: 'pointer', color: 'primary.main' }} onClick={() => b?.id && router.push(`/brands/${b.id}`)}>{b?.brand_category || '-'}</Typography></Grid>
+        <Grid item xs={6} md={3}><Typography variant="caption">Brand/Category</Typography><Typography variant="body2" sx={{ cursor: 'pointer', color: 'primary.main' }} onClick={() => b?.id && navigate(router, `/brands/${b.id}`)}>{b?.brand_category || '-'}</Typography></Grid>
       </Grid>
 
       {data.occurrence_reports?.length > 0 && (
@@ -69,7 +71,7 @@ export default function TaskDetailPage() {
               </TableHead>
               <TableBody>
                 {data.occurrence_reports.map((r: any) => (
-                  <TableRow key={r.report_id} hover sx={{ cursor: 'pointer' }} onClick={() => router.push(`/reports/${r.report_id}`)}>
+                  <TableRow key={r.report_id} hover sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/reports/${r.report_id}`)}>
                     <TableCell>{r.report_date}</TableCell>
                     <TableCell>{r.subject || `#${r.report_id}`}</TableCell>
                   </TableRow>

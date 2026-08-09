@@ -45,6 +45,7 @@ Identify process issues and delays:
 ### 4. Priority Actions
 Find the 4-column priority table (Nancy | Max | Amir | Weheba). Extract each person's actions:
 - person, action, action_ar (Arabic if present), category, urgency (high/medium/low)
+- brand_category: the specific brand/category the action relates to (e.g., "ZF", "PHC Clutch", "Bosch"), or omit/null if the action is global/not brand-specific
 
 ### 5. Sales Timeline
 Find the "Date - Ready for Sale" section. Extract month-by-month brands:
@@ -80,7 +81,7 @@ Find the "Key highlights" section. Extract as a JSON array of strings.
     }
   ],
   "priority_actions": [
-    {"person": "Nancy", "action": "Bosch plugs orders", "action_ar": "", "category": "ordering", "urgency": "high"}
+    {"person": "Nancy", "action": "Bosch plugs orders", "action_ar": "", "category": "ordering", "urgency": "high", "brand_category": "Bosch"}
   ],
   "sales_timeline": {
     "August": ["Plugs (10K)", "SEG", "Transmission (Handler)"],
@@ -90,9 +91,9 @@ Find the "Key highlights" section. Extract as a JSON array of strings.
     "We placed new PHC order (Jan'27) Sales",
     "Korri (ATE/Febi) – Supplier added new cost and CANCELLED order (again)"
   ],
-  "payment_terms": [{"payment_method": "DP + CAD", "deposit_pct": 15, "balance_pct": 85}],
-  "negotiations": [{"type": "discount", "percentage": 8, "status": "agreed"}],
-  "lead_times": [{"days": 30, "status": "current"}],
-  "risk_language": [{"phrase": "cancelled AGAIN", "category": "supplier_failure", "severity_score": 3}],
+  "payment_terms": [{"payment_method": "DP + CAD", "deposit_pct": 15, "balance_pct": 85, "brand_category": "PHC Clutch"}],
+  "negotiations": [{"type": "discount", "percentage": 8, "status": "agreed", "brand_category": "Bosch"}],
+  "lead_times": [{"days": 30, "status": "current", "brand_category": "ZF"}],
+  "risk_language": [{"phrase": "cancelled AGAIN", "category": "supplier_failure", "severity_score": 3, "brand_category": "ATE / Febi"}],
   "percentage_metrics": [{"metric_type": "discount", "value": 8.0}]
 }

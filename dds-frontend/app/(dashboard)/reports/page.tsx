@@ -12,6 +12,7 @@ import { DataGrid, GridColDef, GridRowSelectionModel } from '@mui/x-data-grid';
 import api from '@/lib/api';
 import OriginalEmailModal from '@/components/reports/OriginalEmailModal';
 import { exportReportPDF, exportReportExcel } from '@/lib/export';
+import { navigate } from '@/components/common/navigate';
 import type { ReportSummary } from '@/types/report';
 
 export default function ReportsPage() {
@@ -247,7 +248,7 @@ export default function ReportsPage() {
           onRowSelectionModelChange={(ids) => setSelectedIds(ids)}
           pageSizeOptions={[10, 25, 50]}
           initialState={{ pagination: { paginationModel: { pageSize: 25 } } }}
-          onRowClick={(params) => router.push(`/reports/${params.id}`)}
+          onRowClick={(params) => navigate(router, `/reports/${params.id}`)}
           sx={{ border: 'none', '& .MuiDataGrid-row': { cursor: 'pointer' } }}
           autoHeight
         />

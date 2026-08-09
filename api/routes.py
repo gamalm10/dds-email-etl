@@ -180,6 +180,9 @@ async def get_brand_history(
                 "availability": item.availability_status.value if item.availability_status else "unknown",
                 "milestone": item.milestone,
                 "shipment_bis": item.shipment_bis,
+                "etd": item.etd,
+                "eta": item.eta,
+                "ready_for_sale": item.ready_for_sale,
                 "comments": item.comments_actions,
             }
             for item, report in items
@@ -285,6 +288,9 @@ async def compare_reports(
                     "availability": item.availability_status.value if item.availability_status else "unknown",
                     "milestone": item.milestone,
                     "shipment_bis": item.shipment_bis,
+                    "etd": item.etd,
+                    "eta": item.eta,
+                    "ready_for_sale": item.ready_for_sale,
                     "comments": item.comments_actions,
                 }
                 for item, brand_cat in items
@@ -659,7 +665,8 @@ async def report_items_filtered(report_id: int, status: str | None = Query(None)
             "id": ri.id, "brand_id": ri.brand_id, "brand_category": br.brand_category,
             "division": br.division, "availability_status": ri.availability_status.value if hasattr(ri.availability_status, 'value') else str(ri.availability_status),
             "milestone": ri.milestone, "vendor": ri.vendor,
-            "shipment_bis": ri.shipment_bis, "comments_actions": ri.comments_actions,
+            "shipment_bis": ri.shipment_bis, "etd": ri.etd, "eta": ri.eta, "ready_for_sale": ri.ready_for_sale,
+            "comments_actions": ri.comments_actions,
         })
     return items
 
@@ -726,7 +733,7 @@ def _parse_html_content(html_str: str, subject: str, sender: str) -> "ParsedEmai
     from services.email_parser import (
         _STATUS_COLOR_MAP, _parse_bg_color, _is_header_row,
         _detect_language, _has_arabic, _split_etd_entries,
-        _split_milestones, ParsedRow, ParsedEmail,
+        _split_etd_eta_ready, _split_milestones, ParsedRow, ParsedEmail,
     )
 
     parsed = ParsedEmail(subject=subject, sender=sender, date="", raw_html=html_str, raw_text="")
@@ -779,14 +786,18 @@ def _parse_html_content(html_str: str, subject: str, sender: str) -> "ParsedEmai
         date_entries, no_date_entries = _split_etd_entries(etd_raw)
         if len(date_entries) > 1:
             milestone_parts = _split_milestones(row.milestone, len(date_entries))
-            for idx, (etd, ms) in enumerate(zip(date_entries, milestone_parts), 1):
+            for idx, (etd_entry, ms) in enumerate(zip(date_entries, milestone_parts), 1):
+                etd, eta, ready = _split_etd_eta_ready(etd_entry)
                 r = ParsedRow(
                     division=row.division,
                     brand_category=f"{row.brand_category}-#{idx}",
                     availability=row.availability,
                     milestone=ms,
                     milestone_ar=row.milestone_ar,
-                    shipment_bis=etd,
+                    shipment_bis=etd_entry,
+                    etd=etd,
+                    eta=eta,
+                    ready_for_sale=ready,
                     comments=row.comments,
                     comments_ar=row.comments_ar,
                     language=language,
@@ -795,7 +806,11 @@ def _parse_html_content(html_str: str, subject: str, sender: str) -> "ParsedEmai
             for note in no_date_entries:
                 parsed.future_etd_notes.append((row.brand_category, note))
         else:
+            etd, eta, ready = _split_etd_eta_ready(etd_raw)
             row.shipment_bis = etd_raw
+            row.etd = etd
+            row.eta = eta
+            row.ready_for_sale = ready
             parsed.rows.append(row)
             for note in no_date_entries:
                 parsed.future_etd_notes.append((row.brand_category, note))
@@ -847,6 +862,9 @@ async def reprocess_report(
                 availability=item.availability_status.value if item.availability_status else "",
                 milestone=item.milestone or "",
                 shipment_bis=item.shipment_bis or "",
+                etd=item.etd or "",
+                eta=item.eta or "",
+                ready_for_sale=item.ready_for_sale or "",
                 comments=item.comments_actions or "",
             )
             if item.milestone_ar:

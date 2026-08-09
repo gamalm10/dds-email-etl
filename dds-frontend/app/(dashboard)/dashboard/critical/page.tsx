@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Box, Typography, Card, CardContent, Chip, CircularProgress, Alert } from '@mui/material';
 import api from '@/lib/api';
+import { navigate } from '@/components/common/navigate';
 
 export default function CriticalPage() {
   const router = useRouter();
@@ -25,11 +26,11 @@ export default function CriticalPage() {
             <CardContent sx={{ display: 'flex', alignItems: 'flex-start', gap: 2 }}>
               <Chip label="RED" size="small" color="error" />
               <Box sx={{ flex: 1 }}>
-                <Typography variant="body2" fontWeight={600} sx={{ cursor: 'pointer', color: 'primary.main' }} onClick={() => router.push(`/brands/${i.brand_id}`)}>{i.brand_category}</Typography>
+                <Typography variant="body2" fontWeight={600} sx={{ cursor: 'pointer', color: 'primary.main' }} onClick={() => navigate(router, `/brands/${i.brand_id}`)}>{i.brand_category}</Typography>
                 <Box sx={{ display: 'flex', gap: 1, mt: 0.5 }}>
                   <Typography variant="caption" color="text.secondary">Report: {i.report_date}</Typography>
                   {i.risk_score && <Chip label={`Risk: ${i.risk_score}`} size="small" color="error" variant="outlined" />}
-                  <Typography variant="caption" sx={{ cursor: 'pointer', color: 'primary.main' }} onClick={() => router.push(`/reports/${i.report_id}`)}>View Report</Typography>
+                  <Typography variant="caption" sx={{ cursor: 'pointer', color: 'primary.main' }} onClick={() => navigate(router, `/reports/${i.report_id}`)}>View Report</Typography>
                 </Box>
               </Box>
             </CardContent>

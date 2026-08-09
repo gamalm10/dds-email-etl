@@ -5,6 +5,7 @@ import { Box, Typography, Card, Chip, IconButton, ToggleButtonGroup, ToggleButto
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { Refresh } from '@mui/icons-material';
 import api from '@/lib/api';
+import { navigate } from '@/components/common/navigate';
 
 const PERSONS = ['All', 'Nancy', 'Max', 'Amir', 'Weheba'];
 
@@ -61,7 +62,7 @@ export default function ActionsPage() {
       <Card>
         <DataGrid rows={actions} columns={columns} loading={loading} autoHeight
           pageSizeOptions={[25, 50, 100]} initialState={{ pagination: { paginationModel: { pageSize: 50 } } }}
-          onRowClick={(p: any) => router.push(`/actions/${p.row.id}`)}
+          onRowClick={(p: any) => navigate(router, `/actions/${p.row.id}`)}
           sx={{ border: 'none', '& .MuiDataGrid-row': { cursor: 'pointer' } }} disableRowSelectionOnClick />
       </Card>
     </Box>

@@ -13,6 +13,7 @@ import {
 import { useThemeStore } from '@/stores/themeStore';
 import api from '@/lib/api';
 import { useRouter } from 'next/navigation';
+import { navigate } from '@/components/common/navigate';
 import ThreadReviewDialog from '@/components/reports/ThreadReviewDialog';
 
 interface EmailStatus {
@@ -382,7 +383,7 @@ export default function SettingsPage() {
                             <Box sx={{ display: 'flex', gap: 0.5 }}>
                               {e.report_id && (
                                 <Tooltip title="View Report">
-                                  <IconButton size="small" onClick={() => router.push(`/reports/${e.report_id}`)}>
+                                  <IconButton size="small" onClick={() => navigate(router, `/reports/${e.report_id}`)}>
                                     <Api fontSize="small" />
                                   </IconButton>
                                 </Tooltip>

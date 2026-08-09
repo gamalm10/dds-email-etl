@@ -2,6 +2,7 @@
 import { Dialog, DialogTitle, DialogContent, Typography, CircularProgress } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import { useRouter } from 'next/navigation';
+import { navigate } from '@/components/common/navigate';
 
 interface Props {
   open: boolean;
@@ -44,8 +45,8 @@ export default function DrilldownModal({ open, title, data, onClose }: Props) {
             pageSizeOptions={[10, 25, 50]} initialState={{ pagination: { paginationModel: { pageSize: 25 } } }}
             sx={{ border: 'none' }} disableRowSelectionOnClick
             onRowClick={(p) => {
-              if (title.includes('Items')) router.push(`/brands/${p.row.brand_id}`);
-              else if (title.includes('Actions')) router.push(`/actions/${p.row.id}`);
+              if (title.includes('Items')) navigate(router, `/brands/${p.row.brand_id}`);
+              else if (title.includes('Actions')) navigate(router, `/actions/${p.row.id}`);
               onClose();
             }} />
         )}

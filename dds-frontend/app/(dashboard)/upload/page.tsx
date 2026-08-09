@@ -6,6 +6,7 @@ import {
   Chip, CircularProgress, Alert, Paper,
 } from '@mui/material';
 import { CloudUpload, InsertDriveFile, CheckCircle, Error as ErrorIcon } from '@mui/icons-material';
+import { navigate } from '@/components/common/navigate';
 import api from '@/lib/api';
 import ThreadReviewDialog from '@/components/reports/ThreadReviewDialog';
 
@@ -93,7 +94,7 @@ export default function UploadPage() {
               <Alert key={i} severity={r.success ? 'success' : 'error'} sx={{ mb: 1 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
                   <Typography variant="body2">{r.message}</Typography>
-                  {r.success && <Chip label={`Report #${r.report_id}`} size="small" onClick={() => router.push(`/reports/${r.report_id}`)} sx={{ cursor: 'pointer' }} />}
+                  {r.success && <Chip label={`Report #${r.report_id}`} size="small" onClick={() => navigate(router, `/reports/${r.report_id}`)} sx={{ cursor: 'pointer' }} />}
                   {r.items_extracted > 0 && <Chip label={`${r.items_extracted} items`} size="small" />}
                   {r.tasks_extracted > 0 && <Chip label={`${r.tasks_extracted} tasks`} size="small" />}
                   {r.insights_generated > 0 && <Chip label={`${r.insights_generated} insights`} size="small" />}

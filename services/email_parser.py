@@ -14,6 +14,9 @@ class ParsedRow:
         milestone: str = "",
         milestone_ar: str = "",
         shipment_bis: str = "",
+        etd: str = "",
+        eta: str = "",
+        ready_for_sale: str = "",
         comments: str = "",
         comments_ar: str = "",
         language: str = "en",
@@ -24,6 +27,9 @@ class ParsedRow:
         self.milestone = milestone.strip()
         self.milestone_ar = milestone_ar.strip()
         self.shipment_bis = shipment_bis.strip()
+        self.etd = etd.strip()
+        self.eta = eta.strip()
+        self.ready_for_sale = ready_for_sale.strip()
         self.comments = comments.strip()
         self.comments_ar = comments_ar.strip()
         self.language = language
@@ -131,6 +137,46 @@ def _split_etd_entries(text: str) -> tuple[list[str], list[str]]:
         i += 2
 
     return (date_entries, no_date_entries)
+
+
+_DATE_TOKEN = re.compile(r'(\d{1,2}\.\d{2}|XX(?:\.\d{1,2})?)')
+_TRIPLET_RE = re.compile(
+    r'(\d{1,2}\.\d{2}|XX(?:\.\d{1,2})?)\s*-\s*(\d{1,2}\.\d{2}|XX(?:\.\d{1,2})?)\s*-\s*(\d{1,2}\.\d{2}|XX(?:\.\d{1,2})?)'
+)
+
+
+def _split_etd_eta_ready(text: str) -> tuple[str, str, str]:
+    if not text:
+        return ("", "", "")
+    cleaned = re.sub(r'\s+', ' ', text).strip()
+
+    triplet = _TRIPLET_RE.search(cleaned)
+    if triplet:
+        etd = triplet.group(1)
+        eta = triplet.group(2)
+        ready = triplet.group(3)
+        after = cleaned[triplet.end():].strip()
+        if after:
+            ready = f"{ready} {after}".strip()
+        return (etd, eta, ready)
+
+    tokens = [t.strip() for t in cleaned.split('-')]
+    tokens = [t for t in tokens if t]
+    date_parts = []
+    notes = []
+    for t in tokens:
+        if _DATE_TOKEN.fullmatch(t):
+            date_parts.append(t)
+        else:
+            notes.append(t)
+    etd = date_parts[0] if len(date_parts) >= 1 else ""
+    eta = date_parts[1] if len(date_parts) >= 2 else ""
+    ready = ""
+    if len(date_parts) == 3 and notes:
+        ready = f"{date_parts[2]} {' '.join(notes)}".strip()
+    elif (len(date_parts) == 2 and notes) or not date_parts:
+        ready = " ".join(notes).strip()
+    return (etd, eta, ready)
 
 
 def _split_milestones(text: str, count: int) -> list[str]:
@@ -298,14 +344,18 @@ def parse_email(raw_bytes: bytes) -> ParsedEmail:
         date_entries, no_date_entries = _split_etd_entries(etd_raw)
         if len(date_entries) > 1:
             milestone_parts = _split_milestones(row.milestone, len(date_entries))
-            for idx, (etd, ms) in enumerate(zip(date_entries, milestone_parts), 1):
+            for idx, (etd_entry, ms) in enumerate(zip(date_entries, milestone_parts), 1):
+                etd, eta, ready = _split_etd_eta_ready(etd_entry)
                 r = ParsedRow(
                     division=row.division,
                     brand_category=f"{row.brand_category}-#{idx}",
                     availability=row.availability,
                     milestone=ms,
                     milestone_ar=row.milestone_ar,
-                    shipment_bis=etd,
+                    shipment_bis=etd_entry,
+                    etd=etd,
+                    eta=eta,
+                    ready_for_sale=ready,
                     comments=row.comments,
                     comments_ar=row.comments_ar,
                     language=language,
@@ -314,7 +364,11 @@ def parse_email(raw_bytes: bytes) -> ParsedEmail:
             for note in no_date_entries:
                 parsed.future_etd_notes.append((row.brand_category, note))
         else:
+            etd, eta, ready = _split_etd_eta_ready(etd_raw)
             row.shipment_bis = etd_raw
+            row.etd = etd
+            row.eta = eta
+            row.ready_for_sale = ready
             parsed.rows.append(row)
             for note in no_date_entries:
                 parsed.future_etd_notes.append((row.brand_category, note))

@@ -1,8 +1,11 @@
+import re
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.models import (
     Insight,
+    LeadTime,
     Negotiation,
     PaymentTerm,
     PriorityAction,
@@ -12,6 +15,10 @@ from core.models import (
 
 def _status_value(v):
     return v.value if hasattr(v, 'value') else str(v)
+
+
+def _norm(s):
+    return re.sub(r"\s+", " ", (s or "").strip().lower())
 
 
 def _dedupe_rows(rows, keyfn):
@@ -24,6 +31,54 @@ def _dedupe_rows(rows, keyfn):
         seen.add(key)
         deduped.append(r)
     return deduped
+
+
+def _item_key(kind, item):
+    if kind == "actions":
+        return (_norm(item.get("person")), _norm(item.get("action")))
+    if kind == "tasks":
+        return (_norm(item.get("description")), _norm(item.get("assigned_to")))
+    if kind == "insights":
+        return (_norm(item.get("type")), _norm(item.get("description")))
+    if kind == "payments":
+        return (_norm(item.get("payment_method")), item.get("deposit_pct"), item.get("balance_pct"))
+    if kind == "negotiations":
+        return (_norm(item.get("type")), item.get("status"), item.get("percentage"))
+    return ()
+
+
+def _apply_repeat_filter(reports):
+    ordered = sorted(reports, key=lambda r: r["report_date"] or "", reverse=True)
+    ordered_oldest = list(reversed(ordered))
+    kinds = ("actions", "tasks", "payments", "negotiations")
+    events_by_key = {kind: {} for kind in kinds}
+
+    for report in ordered_oldest:
+        report_date = report["report_date"] or ""
+        report_name = report["subject"] or f"Report #{report['report_id']}"
+        for kind in kinds:
+            for item in report.get(kind, []):
+                key = _item_key(kind, item)
+                if not key:
+                    continue
+                events_by_key[kind].setdefault(key, set()).add((report_date, report_name))
+
+    for report in ordered_oldest:
+        card_date = report["report_date"] or ""
+        for kind in kinds:
+            for item in report.get(kind, []):
+                key = _item_key(kind, item)
+                if not key:
+                    continue
+                events = [(d, n) for d, n in events_by_key[kind].get(key, set()) if d <= card_date]
+                dates = sorted({d for d, _ in events})
+                names = sorted({n for _, n in events})
+                if dates:
+                    item["start_report"] = dates[0]
+                    item["present_dates"] = dates
+                if names:
+                    item["source_reports"] = names
+    return ordered
 
 
 async def build_overview(db: AsyncSession, items, insight_vendor=None):
@@ -48,6 +103,9 @@ async def build_overview(db: AsyncSession, items, insight_vendor=None):
             "availability_status": _status_value(item.availability_status),
             "milestone": item.milestone,
             "shipment_bis": item.shipment_bis,
+            "etd": item.etd,
+            "eta": item.eta,
+            "ready_for_sale": item.ready_for_sale,
             "comments_actions": item.comments_actions,
         })
 
@@ -59,6 +117,7 @@ async def build_overview(db: AsyncSession, items, insight_vendor=None):
     insights = []
     payments = []
     negos = []
+    leads = []
 
     if report_ids:
         actions = (await db.execute(
@@ -72,6 +131,9 @@ async def build_overview(db: AsyncSession, items, insight_vendor=None):
         )).scalars().all()
         negos = (await db.execute(
             select(Negotiation).where(Negotiation.report_id.in_(report_ids))
+        )).scalars().all()
+        leads = (await db.execute(
+            select(LeadTime).where(LeadTime.report_id.in_(report_ids))
         )).scalars().all()
 
     if item_ids:
@@ -90,6 +152,8 @@ async def build_overview(db: AsyncSession, items, insight_vendor=None):
 
     actions_map = {}
     for a in actions:
+        if a.brand_id not in report_brand_ids.get(a.report_id, set()):
+            continue
         actions_map.setdefault(a.report_id, []).append({
             "id": a.id, "person": a.person, "action": a.action, "category": a.category, "urgency": a.urgency,
         })
@@ -114,6 +178,8 @@ async def build_overview(db: AsyncSession, items, insight_vendor=None):
             })
     payments_map = {}
     for p in payments:
+        if p.brand_id not in report_brand_ids.get(p.report_id, set()):
+            continue
         payments_map.setdefault(p.report_id, []).append({
             "id": p.id, "payment_method": p.payment_method, "deposit_pct": float(p.deposit_pct) if p.deposit_pct else None,
             "balance_pct": float(p.balance_pct) if p.balance_pct else None,
@@ -121,20 +187,32 @@ async def build_overview(db: AsyncSession, items, insight_vendor=None):
         })
     negos_map = {}
     for n in negos:
+        if n.brand_id not in report_brand_ids.get(n.report_id, set()):
+            continue
         negos_map.setdefault(n.report_id, []).append({
             "id": n.id, "type": n.type, "percentage": float(n.percentage) if n.percentage else None,
             "status": n.status, "context": n.context,
         })
+    leads_map = {}
+    for l in leads:
+        if l.brand_id not in report_brand_ids.get(l.report_id, set()):
+            continue
+        leads_map.setdefault(l.report_id, []).append({
+            "id": l.id, "days": l.days, "status": l.status, "context": l.context,
+        })
 
     reports = []
-    for rid, r in sorted(by_report.items(), key=lambda kv: kv[1]["report_date"] or "", reverse=True):
+    for rid, r in by_report.items():
         r["statuses"] = sorted({i["availability_status"] for i in r["items"]})
-        r["actions"] = _dedupe_rows(actions_map.get(rid, []), lambda a: (a["person"], a["action"], a["category"], a["urgency"]))
+        r["actions"] = _dedupe_rows(actions_map.get(rid, []), lambda a: (a["person"], _norm(a["action"])))
         r["tasks"] = tasks_map.get(rid, [])
-        r["insights"] = _dedupe_rows(insights_map.get(rid, []), lambda i: (i["type"], i["severity"], i["description"], i["impact"]))
+        r["insights"] = _dedupe_rows(insights_map.get(rid, []), lambda i: (i["type"], _norm(i["description"])))
         r["payments"] = _dedupe_rows(payments_map.get(rid, []), lambda p: (p["payment_method"], p["deposit_pct"], p["balance_pct"]))
         r["negotiations"] = _dedupe_rows(negos_map.get(rid, []), lambda n: (n["type"], n["status"], n["percentage"]))
+        r["leads"] = leads_map.get(rid, [])
         reports.append(r)
+
+    reports = _apply_repeat_filter(reports)
 
     return {
         "stats": {

@@ -2,8 +2,10 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Box, Typography, Card, CardContent, Chip, IconButton, CircularProgress, Grid } from '@mui/material';
-import { ArrowBack, Refresh } from '@mui/icons-material';
+import { Refresh } from '@mui/icons-material';
 import api from '@/lib/api';
+import BackButton from '@/components/common/BackButton';
+import { navigate } from '@/components/common/navigate';
 
 export default function InsightDetailPage() {
   const params = useParams();
@@ -30,7 +32,7 @@ export default function InsightDetailPage() {
   return (
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3 }}>
-        <IconButton onClick={() => router.back()}><ArrowBack /></IconButton>
+        <BackButton fallback="/insights" />
         <Box sx={{ flex: 1 }}><Typography variant="h5">Insight Details</Typography></Box>
         <IconButton onClick={fetch}><Refresh /></IconButton>
       </Box>
@@ -51,7 +53,7 @@ export default function InsightDetailPage() {
       <Grid container spacing={2} mb={3}>
         {data.brand && (
           <Grid item xs={12} md={6}>
-            <Card variant="outlined" sx={{ cursor: 'pointer' }} onClick={() => router.push(`/brands/${data.brand.id}`)}>
+            <Card variant="outlined" sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/brands/${data.brand.id}`)}>
               <CardContent>
                 <Typography variant="caption" color="text.secondary">Brand/Category</Typography>
                 <Typography variant="body2" fontWeight={600} color="primary">{data.brand.brand_category}</Typography>
@@ -62,7 +64,7 @@ export default function InsightDetailPage() {
         )}
         {data.report && (
           <Grid item xs={12} md={6}>
-            <Card variant="outlined" sx={{ cursor: 'pointer' }} onClick={() => router.push(`/reports/${data.report.id}`)}>
+            <Card variant="outlined" sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/reports/${data.report.id}`)}>
               <CardContent>
                 <Typography variant="caption" color="text.secondary">Report</Typography>
                 <Typography variant="body2" fontWeight={600} color="primary">{data.report.date}</Typography>

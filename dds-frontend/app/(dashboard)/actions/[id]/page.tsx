@@ -2,8 +2,10 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Box, Typography, Card, CardContent, Chip, IconButton, CircularProgress, Grid, Paper, Table, TableBody, TableCell, TableContainer, TableHead, TableRow } from '@mui/material';
-import { ArrowBack, Refresh } from '@mui/icons-material';
+import { Refresh } from '@mui/icons-material';
 import api from '@/lib/api';
+import BackButton from '@/components/common/BackButton';
+import { navigate } from '@/components/common/navigate';
 
 export default function ActionDetailPage() {
   const params = useParams();
@@ -31,7 +33,7 @@ export default function ActionDetailPage() {
   return (
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3 }}>
-        <IconButton onClick={() => router.push('/actions')}><ArrowBack /></IconButton>
+        <BackButton fallback="/actions" />
         <Box sx={{ flex: 1 }}>
           <Typography variant="h5">{a.action}</Typography>
           {a.action_ar && (
@@ -54,7 +56,7 @@ export default function ActionDetailPage() {
       <Grid container spacing={2} mb={3}>
         {data.report && (
           <Grid item xs={12} md={6}>
-            <Card variant="outlined" sx={{ cursor: 'pointer' }} onClick={() => router.push(`/reports/${data.report.id}`)}>
+            <Card variant="outlined" sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/reports/${data.report.id}`)}>
               <CardContent>
                 <Typography variant="caption" color="text.secondary">Report</Typography>
                 <Typography variant="body2" fontWeight={600} color="primary">{data.report.date}</Typography>
@@ -95,7 +97,7 @@ export default function ActionDetailPage() {
               </TableHead>
               <TableBody>
                 {data.occurrences.map((o: any) => (
-                  <TableRow key={o.id} hover sx={{ cursor: 'pointer' }} onClick={() => router.push(`/reports/${o.report_id}`)}>
+                  <TableRow key={o.id} hover sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/reports/${o.report_id}`)}>
                     <TableCell>{o.report_date}</TableCell>
                     <TableCell>{o.action}</TableCell>
                     <TableCell><Chip label={o.urgency || 'medium'} size="small" sx={{ bgcolor: urgencyColors[o.urgency] || '#9E9E9E', color: 'white', height: 20, fontSize: 10 }} /></TableCell>

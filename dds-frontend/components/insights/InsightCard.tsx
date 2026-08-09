@@ -1,6 +1,7 @@
 'use client';
 import { Card, CardContent, Typography, Chip, Box } from '@mui/material';
 import { useRouter } from 'next/navigation';
+import { navigate } from '@/components/common/navigate';
 
 interface InsightCardProps {
   insight: {
@@ -29,7 +30,7 @@ export default function InsightCard({ insight, onClick, compact }: InsightCardPr
 
   const handleClick = () => {
     if (onClick) onClick();
-    else router.push(`/insights/${insight.id}`);
+    else navigate(router, `/insights/${insight.id}`);
   };
 
   return (
@@ -50,7 +51,7 @@ export default function InsightCard({ insight, onClick, compact }: InsightCardPr
           </Box>
           {insight.brand_name && (
             <Chip label={insight.brand_name} size="small" variant="outlined" 
-              onClick={(e) => { e.stopPropagation(); router.push(`/brands/${insight.brand_id}`); }} />
+              onClick={(e) => { e.stopPropagation(); navigate(router, `/brands/${insight.brand_id}`); }} />
           )}
         </Box>
         {!compact && insight.risk_tags && (

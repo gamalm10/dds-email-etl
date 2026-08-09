@@ -3,6 +3,7 @@ import { Box, Card, CardContent, Typography, Button, IconButton, Chip } from '@m
 import { Delete, Check, Notifications as NotifIcon } from '@mui/icons-material';
 import { useNotificationStore } from '@/stores/notificationStore';
 import { useRouter } from 'next/navigation';
+import { navigate } from '@/components/common/navigate';
 
 export default function NotificationsPage() {
   const { notifications, markRead, clearAll, markAllRead } = useNotificationStore();
@@ -40,7 +41,7 @@ export default function NotificationsPage() {
             {notifications.map((n) => (
               <Box key={n.id} sx={{ display: 'flex', alignItems: 'center', gap: 2, p: 2, borderBottom: '1px solid', borderColor: 'divider',
                 bgcolor: n.read ? 'transparent' : 'action.hover', cursor: n.reportId ? 'pointer' : 'default' }}
-                onClick={() => { markRead(n.id); if (n.reportId) router.push(`/reports/${n.reportId}`); }}>
+                onClick={() => { markRead(n.id); if (n.reportId) navigate(router, `/reports/${n.reportId}`); }}>
                 <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: getTypeColor(n.type), flexShrink: 0 }} />
                 <Box sx={{ flex: 1 }}>
                   <Typography variant="body2" fontWeight={600}>{n.title}</Typography>

@@ -26,6 +26,7 @@ async def brand_history(brand_id: int, db: AsyncSession = Depends(get_db)):
         select(
             ReportItem.id, ReportItem.report_id, ReportItem.availability_status,
             ReportItem.milestone, ReportItem.milestone_ar, ReportItem.shipment_bis,
+            ReportItem.etd, ReportItem.eta, ReportItem.ready_for_sale,
             ReportItem.comments_actions, ReportItem.comments_actions_ar,
             ReportItem.vendor, ReportItem.quantity_text, ReportItem.financial_text,
             Report.report_date, Report.subject, Report.processing_status,
@@ -44,14 +45,17 @@ async def brand_history(brand_id: int, db: AsyncSession = Depends(get_db)):
             "milestone": row[3],
             "milestone_ar": row[4],
             "shipment_bis": row[5],
-            "comments_actions": row[6],
-            "comments_actions_ar": row[7],
-            "vendor": row[8],
-            "quantity_text": row[9],
-            "financial_text": row[10],
-            "report_date": row[11].isoformat() if row[11] else None,
-            "report_subject": row[12],
-            "processing_status": row[13].value if hasattr(row[13], 'value') else str(row[13]),
+            "etd": row[6],
+            "eta": row[7],
+            "ready_for_sale": row[8],
+            "comments_actions": row[9],
+            "comments_actions_ar": row[10],
+            "vendor": row[11],
+            "quantity_text": row[12],
+            "financial_text": row[13],
+            "report_date": row[14].isoformat() if row[14] else None,
+            "report_subject": row[15],
+            "processing_status": row[16].value if hasattr(row[16], 'value') else str(row[16]),
         })
     return {"brand": {"id": brand.id, "division": brand.division, "brand_category": brand.brand_category}, "history": history}
 
@@ -61,6 +65,7 @@ async def brand_timeline(brand_id: int, db: AsyncSession = Depends(get_db)):
     rows = (await db.execute(
         select(
             ReportItem.availability_status, ReportItem.milestone, ReportItem.shipment_bis,
+            ReportItem.etd, ReportItem.eta, ReportItem.ready_for_sale,
             Report.report_date, ReportItem.comments_actions,
         )
         .join(Report, ReportItem.report_id == Report.id)
@@ -74,11 +79,18 @@ async def brand_timeline(brand_id: int, db: AsyncSession = Depends(get_db)):
         status = row[0].value if hasattr(row[0], 'value') else str(row[0])
         milestone = row[1]
         shipment = row[2]
-        rdate = row[3].isoformat() if row[3] else None
-        comments = row[4]
+        etd = row[3]
+        eta = row[4]
+        ready = row[5]
+        rdate = row[6].isoformat() if row[6] else None
+        comments = row[7]
 
         if rdate != prev_date:
-            events.append({"date": rdate, "status": status, "milestone": milestone, "shipment": shipment, "comments": comments or ""})
+            events.append({
+                "date": rdate, "status": status, "milestone": milestone, "shipment": shipment,
+                "etd": etd, "eta": eta, "ready_for_sale": ready,
+                "comments": comments or "",
+            })
             prev_date = rdate
     return events
 

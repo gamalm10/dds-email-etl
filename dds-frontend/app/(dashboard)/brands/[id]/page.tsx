@@ -5,10 +5,12 @@ import {
   Box, Typography, Card, CardContent, Tabs, Tab, Chip, IconButton, CircularProgress,
   Grid, Paper, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
 } from '@mui/material';
-import { ArrowBack, Refresh } from '@mui/icons-material';
+import { Refresh } from '@mui/icons-material';
 import api from '@/lib/api';
 import InsightTimeline from '@/components/insights/InsightTimeline';
 import ReportTimeline from '@/components/vendors/ReportTimeline';
+import BackButton from '@/components/common/BackButton';
+import { navigate } from '@/components/common/navigate';
 
 export default function BrandDetailPage() {
   const params = useParams();
@@ -55,7 +57,7 @@ export default function BrandDetailPage() {
   return (
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3 }}>
-        <IconButton onClick={() => router.push('/brands')}><ArrowBack /></IconButton>
+        <BackButton fallback="/brands" />
         <Box sx={{ flex: 1 }}><Typography variant="h5">{brand.brand_category}</Typography>
           <Typography variant="body2" color="text.secondary">{brand.division} · {data.report_count} reports</Typography>
         </Box>
@@ -93,7 +95,7 @@ export default function BrandDetailPage() {
               <Grid item xs={6} md={3}><Typography variant="caption">Open Tasks</Typography><Typography variant="h6">{overview?.stats?.open_tasks ?? data.tasks.filter((t:any) => !t.is_resolved).length}</Typography></Grid>
             </Grid>
             <Typography variant="subtitle1" fontWeight={600} gutterBottom>Report Overview</Typography>
-            <ReportTimeline reports={overview?.reports || []} />
+            <ReportTimeline reports={overview?.reports || []} onReprocessed={fetchAll} />
           </Box>
         )}
 
@@ -106,21 +108,25 @@ export default function BrandDetailPage() {
                     <TableCell>Date</TableCell>
                     <TableCell>Status</TableCell>
                     <TableCell>Milestone</TableCell>
-                    <TableCell>Shipment</TableCell>
+                    <TableCell>ETD</TableCell>
+                    <TableCell>ETA</TableCell>
+                    <TableCell>Ready for Sale</TableCell>
                     <TableCell>Comments</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {history.map((h: any) => (
-                    <TableRow key={h.item_id} hover sx={{ cursor: 'pointer' }} onClick={() => router.push(`/reports/${h.report_id}`)}>
+                    <TableRow key={h.item_id} hover sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/reports/${h.report_id}`)}>
                       <TableCell>{h.report_date}</TableCell>
                       <TableCell><Chip label={h.availability_status} size="small" sx={{ bgcolor: getStatusColor(h.availability_status), color: 'white' }} /></TableCell>
                       <TableCell>{h.milestone || '-'}</TableCell>
-                      <TableCell>{h.shipment_bis || '-'}</TableCell>
+                      <TableCell>{h.etd || '-'}</TableCell>
+                      <TableCell>{h.eta || '-'}</TableCell>
+                      <TableCell>{h.ready_for_sale || '-'}</TableCell>
                       <TableCell sx={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>{h.comments_actions || '-'}</TableCell>
                     </TableRow>
                   ))}
-                  {history.length === 0 && <TableRow><TableCell colSpan={5} align="center">No history available</TableCell></TableRow>}
+                  {history.length === 0 && <TableRow><TableCell colSpan={7} align="center">No history available</TableCell></TableRow>}
                 </TableBody>
               </Table>
             </TableContainer>
@@ -137,7 +143,13 @@ export default function BrandDetailPage() {
                     <Typography variant="body2" fontWeight={600}>{e.date}</Typography>
                     <Typography variant="body2">Status: <Chip label={e.status} size="small" sx={{ bgcolor: getStatusColor(e.status), color: 'white' }} /></Typography>
                     {e.milestone && <Typography variant="body2">Milestone: {e.milestone}</Typography>}
-                    {e.shipment && <Typography variant="body2">Shipment: {e.shipment}</Typography>}
+                    {(e.etd || e.eta || e.ready_for_sale) && (
+                      <Typography variant="body2">
+                        {e.etd && <>ETD: {e.etd} · </>}
+                        {e.eta && <>ETA: {e.eta} · </>}
+                        {e.ready_for_sale && <>Ready: {e.ready_for_sale}</>}
+                      </Typography>
+                    )}
                     {e.comments && <Typography variant="caption" color="text.secondary">{e.comments}</Typography>}
                   </Box>
                 </Box>
@@ -163,7 +175,7 @@ export default function BrandDetailPage() {
                 </TableHead>
                 <TableBody>
                   {data.tasks.map((t: any) => (
-                    <TableRow key={t.id} hover sx={{ cursor: 'pointer' }} onClick={() => router.push(`/tasks/${t.id}`)}>
+                    <TableRow key={t.id} hover sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/tasks/${t.id}`)}>
                       <TableCell>{t.description}</TableCell>
                       <TableCell>{t.assigned_to || '-'}</TableCell>
                       <TableCell>{t.category || '-'}</TableCell>

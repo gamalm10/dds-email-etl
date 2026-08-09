@@ -67,9 +67,13 @@ For each row extract:
 - insights with: type, description, severity, impact, recommendation, risk_tags (array), vendor
 
 Also extract:
-- priority_actions: person, action, action_ar, category, urgency
+- priority_actions: person, action, action_ar, category, urgency, brand_category (the specific brand/category the action relates to, or null if global)
 - sales_timeline: month -> brands
 - key_highlights: array of strings
+- payment_terms: payment_method, deposit_pct, balance_pct, brand_category
+- negotiations: type, percentage, status, brand_category
+- lead_times: days, status, brand_category
+- risk_language: phrase, category, severity_score, brand_category
 
 Detect Arabic: set language to "ar" or "mixed", populate *_ar fields.
 

@@ -174,7 +174,7 @@ async def embed_report(db: AsyncSession, report_id: int) -> int:
 
 async def embed_all_reports(db: AsyncSession) -> int:
     reports = (await db.execute(
-        select(Report.id).where(Report.processing_status == "processed")
+        select(Report.id).where(Report.processing_status == "completed")
     )).scalars().all()
     total = 0
     for report_id in reports:

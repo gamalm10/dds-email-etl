@@ -91,9 +91,11 @@ export default function BrandTimeline({ history, loading }: Props) {
                     {r.milestone}
                   </Typography>
                 )}
-                {r.shipment_bis && (
+                {(r.etd || r.eta || r.ready_for_sale) && (
                   <Typography variant="caption" color="text.secondary">
-                    ETD: {r.shipment_bis}
+                    {r.etd && <>ETD: {r.etd} · </>}
+                    {r.eta && <>ETA: {r.eta} · </>}
+                    {r.ready_for_sale && <>Ready: {r.ready_for_sale}</>}
                   </Typography>
                 )}
                 {r.comments && (

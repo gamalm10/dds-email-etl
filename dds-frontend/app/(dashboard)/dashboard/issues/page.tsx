@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Box, Typography, Card, CardContent, Chip, CircularProgress } from '@mui/material';
 import api from '@/lib/api';
+import { navigate } from '@/components/common/navigate';
 
 export default function IssuesPage() {
   const router = useRouter();
@@ -26,13 +27,13 @@ export default function IssuesPage() {
       </Box>
       {loading ? <CircularProgress /> : (
         issues.map((i) => (
-          <Card key={i.insight_id} variant="outlined" sx={{ mb: 1, cursor: 'pointer' }} onClick={() => router.push(`/reports/${i.report_id}`)}>
+          <Card key={i.insight_id} variant="outlined" sx={{ mb: 1, cursor: 'pointer' }} onClick={() => navigate(router, `/reports/${i.report_id}`)}>
             <CardContent sx={{ display: 'flex', alignItems: 'flex-start', gap: 2 }}>
               <Chip label={i.severity} size="small" sx={{ bgcolor: getSeverityColor(i.severity), color: 'white' }} />
               <Box sx={{ flex: 1 }}>
                 <Typography variant="body2" fontWeight={600}>{i.description}</Typography>
                 <Box sx={{ display: 'flex', gap: 1, mt: 0.5 }}>
-                  <Typography variant="caption" sx={{ cursor: 'pointer', color: 'primary.main' }} onClick={(e) => { e.stopPropagation(); router.push(`/brands/${i.brand_id}`); }}>{i.brand_category}</Typography>
+                  <Typography variant="caption" sx={{ cursor: 'pointer', color: 'primary.main' }} onClick={(e) => { e.stopPropagation(); navigate(router, `/brands/${i.brand_id}`); }}>{i.brand_category}</Typography>
                   <Typography variant="caption" color="text.secondary">Report: {i.report_date}</Typography>
                   {i.risk_score && <Chip label={`Risk: ${i.risk_score}`} size="small" color="error" variant="outlined" />}
                 </Box>
