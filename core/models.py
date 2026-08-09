@@ -14,8 +14,10 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Integer,
+    JSON,
     String,
     Text,
+    func,
 )
 from sqlalchemy.dialects.mysql import LONGBLOB, LONGTEXT
 from sqlalchemy.orm import DeclarativeBase, relationship, backref
@@ -92,6 +94,9 @@ class ReportItem(Base):
     milestone = Column(Text)
     milestone_ar = Column(Text)
     shipment_bis = Column(Text)
+    etd = Column(String(100))
+    eta = Column(String(100))
+    ready_for_sale = Column(String(255))
     comments_actions = Column(Text)
     comments_actions_ar = Column(Text)
     quantity_text = Column(String(255))
@@ -213,6 +218,7 @@ class PriorityAction(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     report_id = Column(Integer, ForeignKey("dds_reports.id"), nullable=False)
+    brand_id = Column(Integer, ForeignKey("dds_brands.id"))
     person = Column(String(100), nullable=False)
     action = Column(Text, nullable=False)
     action_ar = Column(Text)
@@ -221,6 +227,7 @@ class PriorityAction(Base):
     created_at = Column(DateTime, default=_utcnow)
 
     report = relationship("Report")
+    brand = relationship("Brand")
 
 
 class ThreadSummary(Base):
@@ -470,3 +477,44 @@ class FetchedEmail(Base):
     processing_status = Column(String(20), default="pending")
     report_id = Column(Integer, ForeignKey("dds_reports.id"), nullable=True)
     error_message = Column(Text, nullable=True)
+
+
+class ChatConversation(Base):
+    __tablename__ = "dds_chat_conversations"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    report_id = Column(Integer, ForeignKey("dds_reports.id", ondelete="SET NULL"), nullable=True)
+    title = Column(String(255), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    messages = relationship("ChatMessage", back_populates="conversation", cascade="all, delete-orphan")
+
+
+class ChatMessage(Base):
+    __tablename__ = "dds_chat_messages"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    conversation_id = Column(Integer, ForeignKey("dds_chat_conversations.id", ondelete="CASCADE"), nullable=False)
+    role = Column(String(20), nullable=False)
+    content = Column(Text, nullable=False)
+    citations = Column(JSON, nullable=True)
+    tokens_used = Column(Integer, nullable=True)
+    model = Column(String(100), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    conversation = relationship("ChatConversation", back_populates="messages")
+
+
+class ReportEmbedding(Base):
+    __tablename__ = "dds_report_embeddings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_type = Column(String(30), nullable=False)
+    source_id = Column(Integer, nullable=False)
+    report_id = Column(Integer, ForeignKey("dds_reports.id", ondelete="CASCADE"), nullable=False)
+    brand_id = Column(Integer, ForeignKey("dds_brands.id", ondelete="SET NULL"), nullable=True)
+    chunk_text = Column(Text, nullable=False)
+    embedding_model = Column(String(100), server_default="text-embedding-3-small")
+    created_at = Column(DateTime, server_default=func.now())
