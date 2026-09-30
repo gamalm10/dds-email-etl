@@ -295,6 +295,73 @@ def resolve_line_comment(
 
 _OWNER_NAMES = {"nancy", "max", "amir", "weheba"}
 
+_OWNER_RE = re.compile(r"\b(Nancy|Max|Amir|Weheba)\b")
+_DEADLINE_PATTERNS = [
+    re.compile(r"\bW\d\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b", re.IGNORECASE),
+    re.compile(r"\b(\d{1,2})\s*(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)(?:'?\d{2})?\b", re.IGNORECASE),
+    re.compile(r"\bend\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b", re.IGNORECASE),
+    re.compile(r"\b\d{1,2}\.\d{2}\b"),
+    re.compile(r"\b(?:19|20)\d{2}\b"),
+]
+_CLAUSE_SPLIT_RE = re.compile(r"//|\n|;")
+
+
+def parse_task_facts(text: str) -> list[dict]:
+    """Derive task facts (owner, deadline, wording) from a comments cell.
+
+    The LLM is sampled, so the number of tasks it returns for the same row
+    varies run to run. Owner and deadline are stated literally in the comment
+    ("Pricing – Max/Amir – 01.10"), so they are read directly; the model is
+    only used to add category and priority.
+    """
+    cleaned = _normalise_cell(text)
+    if not cleaned:
+        return []
+
+    facts: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
+    for clause in _CLAUSE_SPLIT_RE.split(cleaned):
+        clause = _normalise_cell(clause)
+        if len(clause) < 3:
+            continue
+
+        owners = {m.group(0) for m in _OWNER_RE.finditer(clause)}
+        deadlines = [
+            m.group(0)
+            for pattern in _DEADLINE_PATTERNS
+            for m in [pattern.search(clause)]
+            if m
+        ]
+        if not owners and not deadlines:
+            continue
+
+        description = clause
+        for owner in sorted(owners, key=len, reverse=True):
+            description = re.sub(rf"\b{owner}\b", " ", description, flags=re.IGNORECASE)
+        for deadline in deadlines:
+            description = description.replace(deadline, " ")
+        description = re.sub(r"\s+", " ", description)
+        description = re.sub(r"\s*[–—/-]\s*(?=[–—/\-]|$)", " ", description)
+        description = re.sub(r"\s*[–—/-]\s*$", "", description)
+        description = re.sub(r"\s{2,}", " ", description).strip(" –—-/,")
+
+        if not description:
+            description = clause
+
+        key = (description.lower(), ",".join(sorted(owners, key=str.lower)))
+        if key in seen:
+            continue
+        seen.add(key)
+
+        facts.append({
+            "description": description[:500],
+            "assigned_to": ", ".join(sorted(owners, key=str.lower)) or None,
+            "deadline_text": deadlines[0] if deadlines else "",
+        })
+
+    return facts
+
 
 def parse_priority_actions(soup) -> list[dict]:
     """Read the priority-actions table: a person header row with action rows below.

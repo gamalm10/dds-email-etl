@@ -31,7 +31,7 @@ from core.models import (
 from services.analytics import AnalyticsEngine
 from services.embedding_service import embed_report
 from services.anomaly import AnomalyDetector
-from services.email_parser import ParsedEmail, parse_email
+from services.email_parser import ParsedEmail, parse_email, parse_task_facts
 from services.extraction import ExtractionResult, extract_email_data
 from services.imap_listener import parse_dds_date
 from services.notifier import Notifier
@@ -100,7 +100,7 @@ class Processor:
 
             await self._store_report_items(report.id, extraction, parsed)
             await self._generate_discrepancy_insights(report.id, parsed)
-            await self._store_tasks(report.id, extraction)
+            await self._store_tasks(report.id, extraction, parsed)
             await self._store_insights(report.id, extraction)
             await self._store_priority_actions(report.id, extraction, parsed)
             await self._store_thread_summary(report.id, extraction)
@@ -315,11 +315,80 @@ class Processor:
             return None
         return ", ".join(sorted(set(kept), key=str.lower))
 
-    async def _store_tasks(self, report_id: int, extraction: ExtractionResult) -> None:
+    def _deterministic_tasks(self, parsed: ParsedEmail) -> list[dict]:
+        """Build the task list from comment text so its size does not vary run to run.
+
+        The LLM returns 5-31 tasks for identical input because it samples; the
+        owner and deadline are stated literally in the comment, so the list is
+        derived from that and the model only contributes category and priority.
+
+        Reports often repeat one unnumbered comment across every shipment line
+        of a brand, so identical facts collapse to a single task.
+        """
+        tasks: list[dict] = []
+        seen: set[tuple[str, str, str]] = set()
+        for row in parsed.rows:
+            if not row.brand_category:
+                continue
+            facts = parse_task_facts(row.comments)
+            if not facts:
+                continue
+            base = row.brand_category.rsplit("-#", 1)[0]
+            for fact in facts:
+                key = (
+                    base.lower(),
+                    fact["description"].lower(),
+                    (fact["assigned_to"] or "").lower(),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                tasks.append({
+                    "brand_category": row.brand_category,
+                    "description": fact["description"],
+                    "assigned_to": fact["assigned_to"],
+                    "deadline_text": fact["deadline_text"],
+                })
+        return tasks
+
+    @staticmethod
+    def _enrich_tasks(tasks: list[dict], llm_tasks: list[dict]) -> list[dict]:
+        """Attach LLM-derived category/priority/quantity to the parsed tasks."""
+        by_brand: dict[str, list[dict]] = {}
+        for t in llm_tasks:
+            by_brand.setdefault(t.get("brand_category", ""), []).append(t)
+
+        enriched: list[dict] = []
+        for task in tasks:
+            candidates = by_brand.get(task["brand_category"], [])
+            match = None
+            for candidate in candidates:
+                text = str(candidate.get("description", "")).lower()
+                if text and (text in task["description"].lower() or task["description"].lower() in text):
+                    match = candidate
+                    break
+            row = dict(task)
+            if match:
+                for field in ("category", "priority", "is_resolved", "quantity_value", "financial_value", "currency"):
+                    if match.get(field) not in (None, ""):
+                        row[field] = match[field]
+            row.setdefault("priority", "medium")
+            enriched.append(row)
+        return enriched
+
+    async def _store_tasks(
+        self, report_id: int, extraction: ExtractionResult, parsed: ParsedEmail | None = None
+    ) -> None:
         items = await self._build_item_brand_map(report_id)
         divisions = await self._division_names()
 
-        for task_data in extraction.tasks:
+        parsed_tasks = self._deterministic_tasks(parsed) if parsed else []
+        if parsed_tasks:
+            task_rows = self._enrich_tasks(parsed_tasks, extraction.tasks)
+        else:
+            task_rows = extraction.tasks
+
+        for task_data in task_rows:
             item = items.get(task_data.get("brand_category", ""))
             if not item:
                 continue
@@ -858,7 +927,7 @@ class Processor:
 
             await self._update_report_items(report_id, extraction, parsed_email)
             await self._generate_discrepancy_insights(report_id, parsed_email)
-            await self._store_tasks(report_id, extraction)
+            await self._store_tasks(report_id, extraction, parsed_email)
             await self._store_insights(report_id, extraction)
             await self._store_priority_actions(report_id, extraction, parsed_email)
             await self._store_thread_summary(report_id, extraction)
