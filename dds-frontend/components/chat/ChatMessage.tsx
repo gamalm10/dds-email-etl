@@ -1,7 +1,9 @@
 'use client';
-import { Box, Typography, Chip } from '@mui/material';
+import { Box, Typography, Chip, CircularProgress } from '@mui/material';
 import { SmartToy, Person } from '@mui/icons-material';
 import { ChatMessage as ChatMsg, ChatCitation } from '@/types/chat';
+
+const THINKING_PLACEHOLDER = 'Analysing your question…';
 
 function CitationChips({ citations }: { citations: ChatCitation[] }) {
   return (
@@ -17,6 +19,8 @@ function CitationChips({ citations }: { citations: ChatCitation[] }) {
 
 export default function ChatMessage({ message }: { message: ChatMsg }) {
   const isUser = message.role === 'user';
+  const isPending = !isUser && message.content === THINKING_PLACEHOLDER;
+
   return (
     <Box sx={{ display: 'flex', gap: 1, mb: 2, flexDirection: isUser ? 'row-reverse' : 'row', alignItems: 'flex-start' }}>
       <Box sx={{
@@ -29,9 +33,16 @@ export default function ChatMessage({ message }: { message: ChatMsg }) {
         maxWidth: '80%', p: 1.5, borderRadius: 2,
         bgcolor: isUser ? 'primary.main' : 'grey.100', color: isUser ? 'white' : 'text.primary',
       }}>
-        <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
-          {message.content}
-        </Typography>
+        {isPending ? (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, color: 'text.secondary' }}>
+            <CircularProgress size={14} />
+            <Typography variant="body2">{THINKING_PLACEHOLDER}</Typography>
+          </Box>
+        ) : (
+          <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
+            {message.content}
+          </Typography>
+        )}
         {!isUser && message.citations && message.citations.length > 0 && (
           <CitationChips citations={message.citations} />
         )}

@@ -1,5 +1,7 @@
+import asyncio
 import json
 import logging
+import re
 from collections.abc import AsyncGenerator
 
 from sqlalchemy import func, select
@@ -13,6 +15,39 @@ from services.sidecar_manager import SidecarError, SidecarManager
 logger = logging.getLogger(__name__)
 
 CHAT_SYSTEM_PROMPT_PATH = "pi/chat_prompt.md"
+
+CHUNK_DELAY_SECONDS = 0.05
+_BOUNDARY_RE = re.compile(r"[.!?](?=\s|$)\s+|\n")
+
+
+def chunk_for_streaming(text: str, min_chars: int = 48) -> list[str]:
+    """Split an answer into readable chunks so the UI can render it progressively.
+
+    The sidecar only emits whole messages, not token deltas, so the finished
+    answer is emitted in sentence-sized pieces instead of one big block. The
+    original text is sliced rather than split, so no characters are dropped.
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+
+    boundaries = [m.end() for m in _BOUNDARY_RE.finditer(text)]
+    if not boundaries:
+        return [text]
+
+    chunks: list[str] = []
+    start = 0
+    for end in boundaries:
+        if end - start >= min_chars:
+            chunks.append(text[start:end])
+            start = end
+    if start < len(text):
+        remainder = text[start:]
+        if chunks and len(remainder.strip()) < 12:
+            chunks[-1] += remainder
+        else:
+            chunks.append(remainder)
+    return [c for c in chunks if c.strip()]
 
 
 def _load_chat_prompt() -> str:
@@ -128,6 +163,7 @@ async def send_message_stream(
     await db.flush()
 
     yield json.dumps({"type": "metadata", "conversation_id": conv.id}) + "\n"
+    yield json.dumps({"type": "thinking", "stage": "retrieving"}) + "\n"
 
     retrieval_results = await retrieve_context(db, content, report_id)
     context_block = _build_context_block(retrieval_results)
@@ -157,11 +193,15 @@ async def send_message_stream(
     )
 
     try:
+        yield json.dumps({"type": "thinking", "stage": "analysing"}) + "\n"
+
         full_response = await sidecar.prompt(full_prompt, system_prompt)
         if not full_response:
             raise SidecarError("PI SDK returned an empty response")
 
-        yield json.dumps({"type": "token", "content": full_response}) + "\n"
+        for chunk in chunk_for_streaming(full_response):
+            yield json.dumps({"type": "token", "content": chunk}) + "\n"
+            await asyncio.sleep(CHUNK_DELAY_SECONDS)
 
         assistant_msg = ChatMessage(
             conversation_id=conv.id, role="assistant", content=full_response,

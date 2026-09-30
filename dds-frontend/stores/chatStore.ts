@@ -2,12 +2,16 @@ import { create } from 'zustand';
 import { ChatMessage, ChatConversation, ChatCitation } from '@/types/chat';
 import api from '@/lib/api';
 
+const THINKING_PLACEHOLDER = 'Analysing your question…';
+const NO_RESPONSE = 'No response received. Please try again.';
+
 interface ChatState {
   conversations: ChatConversation[];
   currentConversationId: number | null;
   messages: ChatMessage[];
   isOpen: boolean;
   isStreaming: boolean;
+  isThinking: boolean;
   reportId: number | null;
 
   setOpen: (open: boolean) => void;
@@ -18,12 +22,15 @@ interface ChatState {
   startNew: () => void;
 }
 
+let inFlight: AbortController | null = null;
+
 export const useChatStore = create<ChatState>((set, get) => ({
   conversations: [],
   currentConversationId: null,
   messages: [],
   isOpen: false,
   isStreaming: false,
+  isThinking: false,
   reportId: null,
 
   setOpen: (open) => set({ isOpen: open }),
@@ -49,13 +56,29 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   sendMessage: async (content) => {
     const { currentConversationId, reportId, messages } = get();
+
+    inFlight?.abort();
+    const controller = new AbortController();
+    inFlight = controller;
+
     const userMsg: ChatMessage = {
       id: Date.now(), role: 'user', content, created_at: new Date().toISOString(),
     };
+    const replyId = Date.now() + 1;
     const assistantMsg: ChatMessage = {
-      id: Date.now() + 1, role: 'assistant', content: '', created_at: new Date().toISOString(),
+      id: replyId, role: 'assistant', content: THINKING_PLACEHOLDER,
+      created_at: new Date().toISOString(),
     };
-    set({ messages: [...messages, userMsg, assistantMsg], isStreaming: true });
+    set({ messages: [...messages, userMsg, assistantMsg], isStreaming: true, isThinking: true });
+
+    const patchReply = (fn: (m: ChatMessage) => ChatMessage) => {
+      const msgs = [...get().messages];
+      const idx = msgs.findIndex((m) => m.id === replyId);
+      if (idx >= 0) {
+        msgs[idx] = fn(msgs[idx]);
+        set({ messages: msgs });
+      }
+    };
 
     try {
       const url = currentConversationId
@@ -69,13 +92,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
           Authorization: `Bearer ${localStorage.getItem('accessToken') || ''}`,
         },
         body: JSON.stringify({ content, report_id: reportId }),
+        signal: controller.signal,
       });
 
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '');
+        throw new Error(detail.slice(0, 200) || `Request failed (${res.status})`);
+      }
+
       const reader = res.body?.getReader();
-      if (!reader) return;
+      if (!reader) {
+        throw new Error('Streaming is not supported by this browser');
+      }
 
       const decoder = new TextDecoder();
       let buffer = '';
+      let gotTokens = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -87,43 +119,53 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
         for (const line of lines) {
           if (!line.trim()) continue;
+          let event: any;
           try {
-            const event = JSON.parse(line);
-            if (event.type === 'metadata') {
-              set({ currentConversationId: event.conversation_id });
-            } else if (event.type === 'token') {
-              const msgs = [...get().messages];
-              const last = msgs[msgs.length - 1];
-              if (last && last.role === 'assistant') {
-                last.content += event.content;
-                set({ messages: msgs });
-              }
-            } else if (event.type === 'done') {
-              const msgs = [...get().messages];
-              const last = msgs[msgs.length - 1];
-              if (last && last.role === 'assistant') {
-                last.id = event.message_id;
-                last.citations = event.citations;
-                set({ messages: msgs });
-              }
-              get().loadConversations();
-            } else if (event.type === 'error') {
-              const msgs = [...get().messages];
-              const last = msgs[msgs.length - 1];
-              if (last && last.role === 'assistant') {
-                last.content = `Error: ${event.content}`;
-                set({ messages: msgs });
-              }
+            event = JSON.parse(line);
+          } catch {
+            continue;
+          }
+
+          if (event.type === 'metadata') {
+            set({ currentConversationId: event.conversation_id });
+          } else if (event.type === 'thinking') {
+            set({ isThinking: true });
+          } else if (event.type === 'token') {
+            if (!gotTokens) {
+              gotTokens = true;
+              set({ isThinking: false });
+              patchReply((m) => ({ ...m, content: '' }));
             }
-          } catch {}
+            patchReply((m) => ({ ...m, content: m.content + event.content }));
+          } else if (event.type === 'done') {
+            patchReply((m) => ({ ...m, id: event.message_id, citations: event.citations }));
+            set({ isThinking: false });
+            get().loadConversations();
+          } else if (event.type === 'error') {
+            patchReply((m) => ({ ...m, content: `Error: ${event.content}` }));
+            set({ isThinking: false });
+          }
         }
       }
-    } catch (e) {
-      console.error('Chat stream error', e);
+
+      // The stream ended without a done event. Surface it instead of leaving a
+      // placeholder bubble behind forever.
+      patchReply((m) => (m.content.trim() && m.content !== THINKING_PLACEHOLDER ? m : { ...m, content: NO_RESPONSE }));
+    } catch (e: any) {
+      if (e?.name === 'AbortError') {
+        patchReply((m) => ({ ...m, content: 'Request cancelled.' }));
+      } else {
+        console.error('Chat stream error', e);
+        patchReply((m) => ({ ...m, content: `Error: ${e?.message || 'chat failed'}` }));
+      }
     } finally {
-      set({ isStreaming: false });
+      if (inFlight === controller) inFlight = null;
+      set({ isStreaming: false, isThinking: false });
     }
   },
 
-  startNew: () => set({ currentConversationId: null, messages: [] }),
+  startNew: () => {
+    inFlight?.abort();
+    set({ currentConversationId: null, messages: [] });
+  },
 }));

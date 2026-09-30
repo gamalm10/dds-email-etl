@@ -44,10 +44,15 @@ async function proxy(request: NextRequest, path: string[]) {
 
   try {
     const res = await fetch(url + search, { method: request.method, headers, body });
-    const data = await res.blob();
-    return new NextResponse(data, {
+    // Pass the body through as a stream. Awaiting res.blob() buffers the whole
+    // response, which makes SSE endpoints such as chat look frozen until the
+    // backend has finished.
+    return new Response(res.body, {
       status: res.status,
-      headers: { 'Content-Type': res.headers.get('content-type') || 'application/json' },
+      headers: {
+        'Content-Type': res.headers.get('content-type') || 'application/json',
+        'Cache-Control': 'no-store',
+      },
     });
   } catch (err: any) {
     return NextResponse.json({ error: 'Proxy error', message: err.message }, { status: 502 });
