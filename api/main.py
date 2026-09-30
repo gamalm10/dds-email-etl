@@ -16,6 +16,7 @@ from api.routes_vendors import router as vendors_router
 from config.logging import setup_logging
 from config.settings import get_settings
 from core.database import async_session_factory, engine
+from core.models import ProcessingStatus
 from services.imap_listener import ImapListener
 from services.processor import Processor
 from services.sidecar_manager import SidecarManager
@@ -36,13 +37,15 @@ async def lifespan(app: FastAPI):
     await sidecar_manager.start()
     set_sidecar(sidecar_manager)
 
-    async def on_email(raw: bytes, subject: str, received_at):
+    async def on_email(raw: bytes, subject: str, received_at) -> bool:
         try:
             async with async_session_factory() as db:
                 proc = Processor(db, sidecar_manager)
-                await proc.process_email(raw, subject, received_at)
+                report = await proc.process_email(raw, subject, received_at)
+                return report.processing_status == ProcessingStatus.completed
         except Exception as e:
             logger.error(f"Email processing failed: {e}")
+            return False
 
     imap_listener = ImapListener(on_email, sender_filter=settings.email_sender_filter)
     asyncio.create_task(imap_listener.start())

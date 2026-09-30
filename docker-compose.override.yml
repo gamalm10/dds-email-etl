@@ -1,0 +1,4 @@
+services:
+  dds-frontend:
+    ports: !override
+      - "3001:3000"

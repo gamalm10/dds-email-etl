@@ -52,12 +52,27 @@ class Processor:
         self.anomaly = AnomalyDetector(db)
         self.notifier = Notifier(db)
 
+    async def _find_existing_report(self, subject: str, report_date: date) -> Report | None:
+        return (
+            await self.db.execute(
+                select(Report)
+                .where(Report.subject == subject, Report.report_date == report_date)
+                .order_by(Report.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
     async def process_email(self, raw_bytes: bytes, subject: str, received_at: datetime) -> Report:
         parsed = parse_email(raw_bytes)
 
         report_date = parse_dds_date(subject)
         if not report_date:
             raise ProcessingError(f"Subject does not match DDS pattern: {subject}")
+
+        existing = await self._find_existing_report(subject, report_date)
+        if existing:
+            logger.info(f"Skipping duplicate report #{existing.id}: {subject}")
+            return existing
 
         report = Report(
             subject=subject,
@@ -174,28 +189,6 @@ class Processor:
         await self.db.flush()
         await self.enrich_from_parsed(report_id, parsed_email)
         return report
-        result = await self.db.execute(
-            select(Report.id).where(
-                Report.subject == subject,
-                Report.report_date == report_date,
-            ).order_by(Report.id.desc()).limit(1)
-        )
-        row = result.first()
-        rid = row[0] if row else None
-        if not rid:
-            return None
-
-        await self.db.execute(text("UPDATE dds_insights SET matched_anomaly_id = NULL WHERE matched_anomaly_id IS NOT NULL"))
-        await self.db.execute(text("DELETE FROM dds_anomaly_log WHERE matched_insight_id IN (SELECT id FROM dds_insights WHERE report_id = :rid)"), {"rid": rid})
-        await self.db.execute(text("DELETE FROM dds_anomaly_log WHERE source_report_id = :rid OR matched_report_id = :rid"), {"rid": rid})
-        await self.db.execute(text("UPDATE dds_tasks SET first_seen_report_id = NULL, last_seen_report_id = NULL, resolved_at_report_id = NULL WHERE first_seen_report_id = :rid OR last_seen_report_id = :rid OR resolved_at_report_id = :rid"), {"rid": rid})
-        for table in ["dds_clearance_materials", "dds_priority_actions", "dds_thread_summaries", "dds_email_images", "dds_signatures", "dds_email_threads", "dds_ordering_rules", "dds_insights", "dds_processing_log", "dds_risk_language", "dds_payment_terms", "dds_negotiations", "dds_lead_times", "dds_percentage_metrics", "dds_status_history"]:
-            await self.db.execute(text(f"DELETE FROM {table} WHERE report_id = :rid"), {"rid": rid})
-        await self.db.execute(text("DELETE FROM dds_report_items WHERE report_id = :rid"), {"rid": rid})
-        await self.db.execute(text("DELETE FROM dds_reports WHERE id = :rid"), {"rid": rid})
-        await self.db.commit()
-        logger.info(f"Deleted existing report #{rid}: {subject[:50]}")
-        return rid
 
     async def _track_fetched_email(self, subject: str, sender: str, received_at: datetime, report_id: int) -> FetchedEmail:
         result = await self.db.execute(
