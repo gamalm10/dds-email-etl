@@ -19,7 +19,7 @@ DDS_SUBJECT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-OnEmailCallback = Callable[[bytes, str, datetime], Awaitable[None]]
+OnEmailCallback = Callable[[bytes, str, datetime], Awaitable[bool]]
 
 
 _MONTH_MAP = {
@@ -136,7 +136,12 @@ class ImapListener:
                     continue
 
             msg_date = self._extract_date(raw_email)
-            await self.on_email(raw_email, subject, msg_date)
+            processed = await self.on_email(raw_email, subject, msg_date)
+            if processed:
+                try:
+                    await self._client.store(uid, "+FLAGS", "\\SEEN")
+                except Exception as e:
+                    logger.warning(f"Failed to mark email {uid} as seen: {e}")
 
     def _extract_subject(self, raw: bytes) -> str | None:
         msg = email.message_from_bytes(raw)
@@ -157,13 +162,23 @@ class ImapListener:
         return datetime.now(UTC)
 
     def _extract_raw_email(self, lines: list) -> bytes:
-        raw = b""
+        parts: list[bytes] = []
+        expected_literals = 0
         for line in lines:
-            if isinstance(line, (bytes, bytearray)):
-                raw += line if isinstance(line, bytes) else bytes(line)
-            elif isinstance(line, str):
-                try:
-                    raw += line.encode()
-                except (UnicodeDecodeError, UnicodeEncodeError):
-                    pass
-        return raw
+            if isinstance(line, str):
+                line = line.encode("utf-8", errors="ignore")
+            if not isinstance(line, (bytes, bytearray)):
+                continue
+            chunk = bytes(line)
+            literals = re.findall(rb"\{(\d+)\}", chunk)
+            if literals:
+                expected_literals += len(literals)
+                continue
+            if expected_literals:
+                parts.append(chunk)
+                expected_literals -= 1
+                continue
+            stripped = chunk.strip()
+            if stripped in (b")", b"Success completed (Success)"):
+                break
+        return b"".join(parts)
