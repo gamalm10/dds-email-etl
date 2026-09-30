@@ -2,6 +2,11 @@ fastapi>=0.115
 uvicorn[standard]
 sqlalchemy[asyncio]>=2.0
 aiomysql
+# PyMySQL >=1.2 only ships converters as a C extension; without a compiler the
+# pure-Python fallback exposes escape_bytes_prefixed as the literal string
+# 'DO NOT IMPORT THIS!!!', which makes every BLOB write raise
+# TypeError: 'str' object is not callable. 1.1.x has a working pure-Python path.
+pymysql<1.2
 pydantic>=2.0
 pydantic-settings
 python-dotenv
