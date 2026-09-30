@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from openai import OpenAI
 from sqlalchemy import select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.models import (
@@ -189,16 +190,18 @@ async def _structured_search(
         results.append(RetrievalResult("clearance_material", cm.id, cm.report_id, None, chunk, min(score, 1.0)))
 
     # 11. Status History
-    sh_q = select(StatusHistory).join(Brand, StatusHistory.brand_id == Brand.id, isouter=True)
+    sh_q = (
+        select(StatusHistory, Brand.brand_category)
+        .join(Brand, StatusHistory.brand_id == Brand.id, isouter=True)
+    )
     if report_id:
         sh_q = sh_q.where(StatusHistory.report_id == report_id)
-    for sh in (await db.execute(sh_q)).all():
-        brand = await db.get(Brand, sh.brand_id) if sh.brand_id else None
-        chunk = f"Status Change: {brand.brand_category if brand else 'Unknown'} | {sh.previous_status} -> {sh.current_status} | Gap: {sh.days_since_last_report or ''} days"
+    for sh, brand_name in (await db.execute(sh_q)).all():
+        chunk = f"Status Change: {brand_name or 'Unknown'} | {sh.previous_status} -> {sh.current_status} | Gap: {sh.days_since_last_report or ''} days"
         score = 0.3
         if any(t.lower() in q_lower for t in ["status change", "improved", "worsened"]):
             score += 0.3
-        results.append(RetrievalResult("status_history", sh.id, sh.report_id, brand.brand_category if brand else None, chunk, min(score, 1.0)))
+        results.append(RetrievalResult("status_history", sh.id, sh.report_id, brand_name, chunk, min(score, 1.0)))
 
     # 12. Thread Summaries
     ts_q = select(ThreadSummary)
@@ -269,11 +272,27 @@ async def _vector_search(
     return results
 
 
+async def _embeddings_table_exists(db: AsyncSession) -> bool:
+    result = await db.execute(
+        text("SELECT COUNT(*) FROM information_schema.tables "
+             "WHERE table_schema = DATABASE() AND table_name = 'dds_report_embeddings'")
+    )
+    return bool(result.scalar())
+
+
 async def retrieve_context(
     db: AsyncSession, query: str, report_id: int | None = None, brand_id: int | None = None
 ) -> list[RetrievalResult]:
     structured = await _structured_search(db, query, report_id, brand_id)
-    vector = await _vector_search(db, query, report_id, brand_id)
+
+    vector: list[RetrievalResult] = []
+    if await _embeddings_table_exists(db):
+        try:
+            vector = await _vector_search(db, query, report_id, brand_id)
+        except SQLAlchemyError as e:
+            logger.warning(f"Vector search failed, falling back to structured: {e}")
+    else:
+        logger.info("Embeddings table missing, using structured search only")
 
     seen = set()
     merged = []

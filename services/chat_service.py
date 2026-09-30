@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.models import ChatConversation, ChatMessage
+from services.analysis import build_analysis_block
 from services.rag_retriever import retrieve_context
 from services.sidecar_manager import SidecarError, SidecarManager
 
@@ -147,32 +148,24 @@ async def send_message_stream(
         role = "User" if m.role == "user" else "Assistant"
         history_text += f"{role}: {m.content}\n"
 
+    analysis_block = await build_analysis_block(db, report_id)
+
     full_prompt = (
-        f"{context_block}\n\n---\n\n"
+        f"{analysis_block}\n\n{context_block}\n\n---\n\n"
         f"## Conversation History\n{history_text}\n\n---\n\n"
         f"## Current Question\n{content}"
     )
 
     try:
-        request = {
-            "jsonrpc": "2.0",
-            "method": "session/prompt",
-            "params": {
-                "text": full_prompt,
-                "systemPrompt": system_prompt,
-                "model": "gpt-5.4-mini",
-            },
-            "id": 1,
-        }
-
-        result = await sidecar._send_request(request)
-        full_response = result.get("result", "") if isinstance(result, dict) else str(result)
+        full_response = await sidecar.prompt(full_prompt, system_prompt)
+        if not full_response:
+            raise SidecarError("PI SDK returned an empty response")
 
         yield json.dumps({"type": "token", "content": full_response}) + "\n"
 
         assistant_msg = ChatMessage(
             conversation_id=conv.id, role="assistant", content=full_response,
-            citations=citations if citations else None, model="gpt-5.4-mini",
+            citations=citations if citations else None, model=sidecar.model_id,
         )
         db.add(assistant_msg)
         await db.commit()

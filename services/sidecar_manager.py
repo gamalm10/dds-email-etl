@@ -1,11 +1,15 @@
 import asyncio
 import json
 import logging
+import re
 from asyncio.subprocess import PIPE
 
 from config.settings import get_settings
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_MODEL_PROVIDER = "openai"
+DEFAULT_MODEL_ID = "gpt-4.1-mini"
 
 
 class SidecarError(Exception):
@@ -13,14 +17,30 @@ class SidecarError(Exception):
 
 
 class SidecarManager:
+    """Talks to the PI coding agent over its JSON-lines RPC mode.
+
+    The wire format is NOT JSON-RPC: commands are
+    ``{"id": N, "type": "<command>", ...params}`` and replies come back as
+    ``{"id": N, "type": "response", "command": ..., "success": ..., "data": ...}``.
+    A ``prompt`` command is acknowledged as soon as preflight passes, then emits
+    a stream of events terminated by ``agent_end``.
+    """
+
     def __init__(self):
         self._process: asyncio.subprocess.Process | None = None
         self._running = False
         self._lock = asyncio.Lock()
+        self._next_id = 0
+        self._buffer: list[dict] = []
+        self._model: str | None = None
+
+    @property
+    def model_id(self) -> str:
+        return self._model or DEFAULT_MODEL_ID
 
     async def start(self):
         async with self._lock:
-            if self._running:
+            if self._running and self._process and self._process.returncode is None:
                 return
             settings = get_settings()
             self._process = await asyncio.create_subprocess_shell(
@@ -30,7 +50,9 @@ class SidecarManager:
                 stderr=PIPE,
             )
             self._running = True
-            logger.info("PI SDK sidecar started (PID: %s)", self._process.pid)
+            self._buffer = []
+            self._model = None
+            logger.info("PI SDK sidecar started (PID %s)", self._process.pid)
 
     async def stop(self):
         async with self._lock:
@@ -50,80 +72,147 @@ class SidecarManager:
             self._running = False
             logger.info("PI SDK sidecar stopped")
 
-    async def extract(self, email_html: str, context: str | None = None) -> dict:
+    def _alloc_id(self) -> int:
+        self._next_id += 1
+        return self._next_id
+
+    async def _write(self, payload: dict) -> None:
+        if not self._process or self._process.stdin is None:
+            raise SidecarError("Sidecar not running")
+        self._process.stdin.write((json.dumps(payload) + "\n").encode())
+        await self._process.stdin.drain()
+
+    async def _read_event(self, timeout: float) -> dict:
+        if not self._process or self._process.stdout is None:
+            raise SidecarError("Sidecar not running")
+        line = await asyncio.wait_for(self._process.stdout.readline(), timeout=timeout)
+        if not line:
+            raise SidecarError("PI SDK sidecar closed its output stream")
+        text = line.decode(errors="replace").strip()
+        if not text:
+            return {}
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return {"type": "log", "message": text}
+
+    async def _await_response(self, req_id: int, timeout: float) -> dict:
+        """Read until the response matching req_id arrives, buffering other events."""
+        for event in self._buffer:
+            if event.get("type") == "response" and event.get("id") == req_id:
+                self._buffer.remove(event)
+                return event
+        while True:
+            event = await self._read_event(timeout)
+            if event.get("type") == "response" and event.get("id") == req_id:
+                return event
+            if event:
+                self._buffer.append(event)
+
+    async def _command(self, command: str, timeout: float, **params) -> dict:
+        req_id = self._alloc_id()
+        await self._write({"id": req_id, "type": command, **params})
+        response = await self._await_response(req_id, timeout)
+        if not response.get("success"):
+            raise SidecarError(f"PI SDK error: {response.get('error')}")
+        return response.get("data") or {}
+
+    async def _ensure_model(self) -> None:
+        if self._model == DEFAULT_MODEL_ID:
+            return
+        await self._command(
+            "set_model",
+            30,
+            provider=DEFAULT_MODEL_PROVIDER,
+            modelId=DEFAULT_MODEL_ID,
+        )
+        self._model = DEFAULT_MODEL_ID
+        logger.info("PI SDK model set to %s", DEFAULT_MODEL_ID)
+
+    @staticmethod
+    def _message_text(message: dict) -> str:
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    parts.append(block.get("text", ""))
+            return "\n".join(p for p in parts if p)
+        return ""
+
+    async def prompt(self, message: str, system_prompt: str | None = None) -> str:
+        """Run one prompt to completion and return the assistant's text."""
         if not self._running or not self._process:
             await self.start()
 
+        settings = get_settings()
+        timeout = float(settings.pi_timeout_seconds)
+
+        async with self._lock:
+            try:
+                await self._ensure_model()
+            except (SidecarError, TimeoutError) as e:
+                logger.warning(f"Could not select model ({e}); continuing with sidecar default")
+
+            full_text = f"{system_prompt}\n\n---\n\n{message}" if system_prompt else message
+            req_id = self._alloc_id()
+            await self._write({"id": req_id, "type": "prompt", "message": full_text})
+
+            try:
+                response = await self._await_response(req_id, timeout)
+            except (SidecarError, TimeoutError) as e:
+                await self._restart()
+                raise SidecarError(f"PI SDK prompt failed: {e}") from e
+
+            if not response.get("success"):
+                raise SidecarError(f"PI SDK error: {response.get('error')}")
+
+            chunks: list[str] = []
+            while True:
+                try:
+                    event = await self._read_event(timeout)
+                except (SidecarError, TimeoutError) as e:
+                    await self._restart()
+                    raise SidecarError(f"PI SDK stream failed: {e}") from e
+                kind = event.get("type")
+                if kind == "agent_end":
+                    break
+                if kind == "message_end":
+                    message_obj = event.get("message") or {}
+                    if message_obj.get("role") == "assistant":
+                        text = self._message_text(message_obj)
+                        if text:
+                            chunks.append(text)
+                if kind == "error":
+                    raise SidecarError(f"PI SDK error: {event.get('error') or event}")
+
+            return "\n".join(chunks).strip()
+
+    @staticmethod
+    def _parse_json_response(text: str) -> dict:
+        cleaned = text.strip()
+        fenced = re.search(r"```(?:json)?\s*(.+?)```", cleaned, re.DOTALL)
+        if fenced:
+            cleaned = fenced.group(1).strip()
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            start = cleaned.find("{")
+            end = cleaned.rfind("}")
+            if start >= 0 and end > start:
+                return json.loads(cleaned[start:end + 1])
+            raise
+
+    async def extract(self, email_html: str, context: str | None = None) -> dict:
         prompt_text = email_html
         if context:
             prompt_text = f"Previous report context:\n{context}\n\nNew email:\n{email_html}"
 
         system_prompt = self._load_system_prompt()
-
-        request = {
-            "jsonrpc": "2.0",
-            "method": "session/prompt",
-            "params": {
-                "text": prompt_text,
-                "systemPrompt": system_prompt,
-                "model": "gpt-5.4-mini",
-            },
-            "id": 1,
-        }
-
-        return await self._send_request(request)
-
-    async def embed(self, text: str) -> list[float]:
-        request = {
-            "jsonrpc": "2.0",
-            "method": "session/prompt",
-            "params": {
-                "text": f"Return ONLY a JSON array of floats representing the embedding vector for this text, no other output: {text}",
-                "model": "text-embedding-3-small",
-            },
-            "id": 2,
-        }
-        return await self._send_request(request)
-
-    async def _send_request(self, request: dict) -> any:
-        async with self._lock:
-            if not self._process or not self._process.stdin:
-                raise SidecarError("Sidecar not running")
-
-            settings = get_settings()
-            stdin_data = (json.dumps(request) + "\n").encode()
-            self._process.stdin.write(stdin_data)
-            await self._process.stdin.drain()
-
-            try:
-                response = await asyncio.wait_for(
-                    self._read_line(),
-                    timeout=settings.pi_timeout_seconds,
-                )
-            except TimeoutError:
-                await self._restart()
-                raise SidecarError("PI SDK sidecar timed out")
-
-            if not response:
-                await self._restart()
-                raise SidecarError("PI SDK sidecar returned empty response")
-
-            result = json.loads(response.decode())
-            if "error" in result:
-                raise SidecarError(f"PI SDK error: {result['error']}")
-
-            raw_result = result.get("result", "{}")
-            if isinstance(raw_result, str):
-                return json.loads(raw_result)
-            return raw_result
-
-    async def _read_line(self) -> bytes | None:
-        if not self._process or not self._process.stdout:
-            return None
-        try:
-            return await asyncio.wait_for(self._process.stdout.readline(), timeout=120)
-        except TimeoutError:
-            return None
+        answer = await self.prompt(prompt_text, system_prompt)
+        return self._parse_json_response(answer)
 
     async def _restart(self):
         logger.warning("Restarting PI SDK sidecar")
