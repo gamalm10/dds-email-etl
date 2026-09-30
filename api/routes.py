@@ -724,6 +724,7 @@ async def trigger_process(
             count += 1
         except Exception as e:
             logger.error(f"Failed to process email {subject}: {e}")
+            await db.rollback()
 
     return ProcessResponse(success=True, message=f"Processed {count} emails")
 
@@ -731,89 +732,16 @@ async def trigger_process(
 def _parse_html_content(html_str: str, subject: str, sender: str) -> "ParsedEmail":
     from bs4 import BeautifulSoup
     from services.email_parser import (
-        _STATUS_COLOR_MAP, _parse_bg_color, _is_header_row,
-        _detect_language, _has_arabic, _split_etd_entries,
-        _split_etd_eta_ready, _split_milestones, ParsedRow, ParsedEmail,
+        ParsedEmail, build_rows_from_table, find_main_table,
     )
 
     parsed = ParsedEmail(subject=subject, sender=sender, date="", raw_html=html_str, raw_text="")
     soup = BeautifulSoup(html_str, "html.parser")
-    tables = soup.find_all("table")
-    main_table = None
-    for t in tables:
-        text = t.get_text(" ", strip=True)
-        if "Division" in text and "Brand" in text:
-            main_table = t
-            break
+    main_table = find_main_table(soup)
     if not main_table:
         return parsed
 
-    current_division = ""
-    for tr in main_table.find_all("tr"):
-        cells = tr.find_all("td")
-        if len(cells) < 4:
-            continue
-        row = ParsedRow()
-        raw_div = cells[0].get_text(" ", strip=True)
-        if raw_div:
-            current_division = raw_div
-        row.division = current_division
-        if len(cells) > 1:
-            row.brand_category = cells[1].get_text(" ", strip=True)
-        if len(cells) > 2:
-            avail_text = cells[2].get_text(" ", strip=True).lower().strip()
-            row.availability = _STATUS_COLOR_MAP.get(avail_text, "unknown")
-            if row.availability == "unknown":
-                cell_style = cells[2].get("style", "") or cells[2].get("bgcolor", "")
-                if cell_style:
-                    row.availability = _parse_bg_color(cell_style)
-        if len(cells) > 3:
-            row.milestone = cells[3].get_text(" ", strip=True)
-        etd_raw = ""
-        if len(cells) > 4:
-            etd_raw = cells[4].get_text(" ", strip=True)
-        if len(cells) > 5:
-            row.comments = cells[5].get_text(" ", strip=True)
-        language = _detect_language(row.milestone, row.comments)
-        row.language = language
-        if language in ("ar", "mixed"):
-            if _has_arabic(row.milestone):
-                row.milestone_ar = row.milestone
-            if _has_arabic(row.comments):
-                row.comments_ar = row.comments
-        if not row.brand_category or _is_header_row(row.division, row.brand_category):
-            continue
-        date_entries, no_date_entries = _split_etd_entries(etd_raw)
-        if len(date_entries) > 1:
-            milestone_parts = _split_milestones(row.milestone, len(date_entries))
-            for idx, (etd_entry, ms) in enumerate(zip(date_entries, milestone_parts), 1):
-                etd, eta, ready = _split_etd_eta_ready(etd_entry)
-                r = ParsedRow(
-                    division=row.division,
-                    brand_category=f"{row.brand_category}-#{idx}",
-                    availability=row.availability,
-                    milestone=ms,
-                    milestone_ar=row.milestone_ar,
-                    shipment_bis=etd_entry,
-                    etd=etd,
-                    eta=eta,
-                    ready_for_sale=ready,
-                    comments=row.comments,
-                    comments_ar=row.comments_ar,
-                    language=language,
-                )
-                parsed.rows.append(r)
-            for note in no_date_entries:
-                parsed.future_etd_notes.append((row.brand_category, note))
-        else:
-            etd, eta, ready = _split_etd_eta_ready(etd_raw)
-            row.shipment_bis = etd_raw
-            row.etd = etd
-            row.eta = eta
-            row.ready_for_sale = ready
-            parsed.rows.append(row)
-            for note in no_date_entries:
-                parsed.future_etd_notes.append((row.brand_category, note))
+    build_rows_from_table(soup, main_table, parsed)
     return parsed
 
 
