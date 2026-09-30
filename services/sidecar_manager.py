@@ -11,6 +11,15 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODEL_PROVIDER = "openai"
 DEFAULT_MODEL_ID = "gpt-4.1-mini"
 
+# asyncio's default stream limit is 64 KiB, which the sidecar's message_start /
+# message_end events exceed once the prompt carries a large retrieval context.
+STDOUT_LIMIT = 32 * 1024 * 1024
+
+# message_start / message_end echo the whole prompt back and can be megabytes
+# long; they are never the response we are waiting for, so they are dropped
+# rather than buffered while looking for a matching id.
+_BUFFERED_EVENTS = {"error", "log"}
+
 
 class SidecarError(Exception):
     pass
@@ -48,6 +57,7 @@ class SidecarManager:
                 stdin=PIPE,
                 stdout=PIPE,
                 stderr=PIPE,
+                limit=STDOUT_LIMIT,
             )
             self._running = True
             self._buffer = []
@@ -106,7 +116,7 @@ class SidecarManager:
             event = await self._read_event(timeout)
             if event.get("type") == "response" and event.get("id") == req_id:
                 return event
-            if event:
+            if event and event.get("type") in _BUFFERED_EVENTS:
                 self._buffer.append(event)
 
     async def _command(self, command: str, timeout: float, **params) -> dict:
