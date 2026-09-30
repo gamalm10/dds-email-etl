@@ -4,14 +4,14 @@ import os
 from typing import Optional
 
 from openai import OpenAI
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.models import Insight, AnomalyLog
+from core.models import Insight, AnomalyLog, Report
 
 logger = logging.getLogger(__name__)
 
-SIMILARITY_THRESHOLD = 0.85
+SIMILARITY_THRESHOLD = 0.95
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -119,3 +119,40 @@ class AnomalyDetector:
         except (ValueError, UnicodeDecodeError):
             pass
         return []
+
+    async def redetect_all(self, report_ids: list[int] | None = None) -> int:
+        """Recompute anomalies from stored embeddings, without calling OpenAI.
+
+        Used after changing SIMILARITY_THRESHOLD: process_insight_embeddings
+        only considers insights whose embedding is NULL, so an already embedded
+        corpus would otherwise never be re-evaluated.
+        """
+        await self.db.execute(text("DELETE FROM dds_anomaly_log"))
+        await self.db.execute(
+            text("UPDATE dds_insights SET matched_anomaly_id = NULL, anomaly_score = NULL")
+        )
+        await self.db.commit()
+
+        if report_ids is None:
+            rows = await self.db.execute(
+                select(Report.id)
+                .join(Insight, Insight.report_id == Report.id)
+                .where(Insight.embedding.isnot(None))
+                .group_by(Report.id)
+            )
+            report_ids = list(rows.scalars().all())
+
+        total = 0
+        for report_id in sorted(report_ids):
+            insights = (
+                await self.db.execute(
+                    select(Insight).where(
+                        Insight.report_id == report_id,
+                        Insight.embedding.isnot(None),
+                    )
+                )
+            ).scalars().all()
+            if not insights:
+                continue
+            total += len(await self._detect_anomalies(report_id, insights))
+        return total

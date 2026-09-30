@@ -59,6 +59,7 @@ class ParsedEmail:
         self.cc_list = cc_list
         self.rows: list[ParsedRow] = []
         self.future_etd_notes: list[tuple[str, str]] = []
+        self.priority_actions: list[dict] = []
 
 
 _COLOR_MAP: dict[str, str] = {
@@ -292,6 +293,37 @@ def resolve_line_comment(
     return ""
 
 
+_OWNER_NAMES = {"nancy", "max", "amir", "weheba"}
+
+
+def parse_priority_actions(soup) -> list[dict]:
+    """Read the priority-actions table: a person header row with action rows below.
+
+    The LLM extracts these inconsistently (4-22 actions for the same table
+    shape), so the table is read directly. Only the first such table is used,
+    which is the current reporting month; the forward chain contains one per
+    month snapshot.
+    """
+    for table in soup.find_all("table"):
+        rows = table.find_all("tr")
+        if len(rows) < 2:
+            continue
+        owners = [_normalise_cell(c.get_text(" ", strip=True)) for c in rows[0].find_all(["td", "th"])]
+        if not any(owners):
+            continue
+        if not all((not o) or o.lower() in _OWNER_NAMES for o in owners):
+            continue
+
+        actions: list[dict] = []
+        for tr in rows[1:]:
+            cells = [_normalise_cell(c.get_text(" ", strip=True)) for c in tr.find_all(["td", "th"])]
+            for idx, text in enumerate(cells):
+                if idx < len(owners) and owners[idx] and text:
+                    actions.append({"person": owners[idx], "action": text})
+        return actions
+    return []
+
+
 def _table_month(table) -> str:
     first = table.find("tr")
     if not first:
@@ -415,6 +447,8 @@ def find_main_table(soup):
 
 def build_rows_from_table(soup, main_table, parsed: ParsedEmail) -> None:
     fallbacks = _build_table_attached_fallbacks(soup, main_table, _table_month(main_table))
+    if not parsed.priority_actions:
+        parsed.priority_actions = parse_priority_actions(soup)
     current_division = ""
 
     for tr in main_table.find_all("tr"):

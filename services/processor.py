@@ -102,7 +102,7 @@ class Processor:
             await self._generate_discrepancy_insights(report.id, parsed)
             await self._store_tasks(report.id, extraction)
             await self._store_insights(report.id, extraction)
-            await self._store_priority_actions(report.id, extraction)
+            await self._store_priority_actions(report.id, extraction, parsed)
             await self._store_thread_summary(report.id, extraction)
 
             histories = await self.analytics.compute_status_history(report.id)
@@ -298,8 +298,26 @@ class Processor:
         ).all()
         return {brand_cat: item for item, brand_cat in rows}
 
+    async def _division_names(self) -> set[str]:
+        rows = await self.db.execute(select(Brand.division).distinct())
+        return {str(r[0]).strip().lower() for r in rows if r[0]}
+
+    @staticmethod
+    def _clean_assignee(value, divisions: set[str]) -> str | None:
+        """Keep only real people, dropping division names the LLM mistakes for owners."""
+        if value is None:
+            return None
+        if isinstance(value, list):
+            value = ", ".join(str(v) for v in value)
+        parts = [p.strip() for p in re.split(r"[,;/]", str(value)) if p.strip()]
+        kept = [p for p in parts if p.lower() not in divisions]
+        if not kept:
+            return None
+        return ", ".join(sorted(set(kept), key=str.lower))
+
     async def _store_tasks(self, report_id: int, extraction: ExtractionResult) -> None:
         items = await self._build_item_brand_map(report_id)
+        divisions = await self._division_names()
 
         for task_data in extraction.tasks:
             item = items.get(task_data.get("brand_category", ""))
@@ -313,9 +331,7 @@ class Processor:
                 except (ValueError, TypeError):
                     pass
 
-            assigned_to = task_data.get("assigned_to")
-            if isinstance(assigned_to, list):
-                assigned_to = ", ".join(str(a) for a in assigned_to)
+            assigned_to = self._clean_assignee(task_data.get("assigned_to"), divisions)
 
             deadline = None
             if task_data.get("deadline"):
@@ -458,8 +474,58 @@ class Processor:
             )
         ).scalar_one_or_none()
 
-    async def _store_priority_actions(self, report_id: int, extraction: ExtractionResult) -> None:
-        actions_raw = extraction.raw.get("priority_actions", [])
+    @staticmethod
+    def _merge_priority_actions(
+        parsed: ParsedEmail | None, llm_actions: list[dict]
+    ) -> list[dict]:
+        """Prefer the table parsed from HTML, keeping LLM enrichment where it matches.
+
+        The priority-actions table is structured, but the LLM returned anywhere
+        from 4 to 22 actions for identically shaped tables. The table read is
+        authoritative for person/action; the LLM is only used to add category,
+        urgency and brand, and for any action it found that is not in the table.
+        """
+        table_actions = list(parsed.priority_actions) if parsed and parsed.priority_actions else []
+        if not table_actions:
+            return llm_actions
+
+        merged: list[dict] = []
+        used_llm: set[int] = set()
+        for entry in table_actions:
+            action_text = entry["action"]
+            match_idx = None
+            for i, llm in enumerate(llm_actions):
+                if i in used_llm:
+                    continue
+                candidate = str(llm.get("action", "")).strip()
+                if not candidate:
+                    continue
+                if candidate.lower() in action_text.lower() or action_text.lower() in candidate.lower():
+                    match_idx = i
+                    break
+            row = {"person": entry["person"], "action": action_text}
+            if match_idx is not None:
+                used_llm.add(match_idx)
+                llm = llm_actions[match_idx]
+                for field in ("action_ar", "category", "urgency", "brand_category"):
+                    if llm.get(field):
+                        row[field] = llm[field]
+            merged.append(row)
+
+        for i, llm in enumerate(llm_actions):
+            if i not in used_llm and str(llm.get("action", "")).strip():
+                merged.append(llm)
+
+        return merged
+
+    async def _store_priority_actions(
+        self,
+        report_id: int,
+        extraction: ExtractionResult,
+        parsed: ParsedEmail | None = None,
+    ) -> None:
+        llm_actions = extraction.raw.get("priority_actions", []) or []
+        actions_raw = self._merge_priority_actions(parsed, llm_actions)
         items = await self._build_item_brand_map(report_id)
 
         brand_names = sorted(items.keys(), key=len, reverse=True)
@@ -794,7 +860,7 @@ class Processor:
             await self._generate_discrepancy_insights(report_id, parsed_email)
             await self._store_tasks(report_id, extraction)
             await self._store_insights(report_id, extraction)
-            await self._store_priority_actions(report_id, extraction)
+            await self._store_priority_actions(report_id, extraction, parsed_email)
             await self._store_thread_summary(report_id, extraction)
 
             histories = await self.analytics.compute_status_history(report_id)
