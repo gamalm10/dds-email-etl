@@ -1,7 +1,15 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
-const publicPaths = ['/login', '/register', '/forgot-password', '/reset-password', '/api/auth/login', '/api/auth/register', '/api/auth/forgot-password', '/api/auth/verify-otp', '/api/auth/reset-password', '/health'];
+// /api/auth/refresh must be reachable without an access token: the refresh
+// token travels in the request body precisely because the access token has
+// expired. Without it listed here the middleware rejected it with 401, so the
+// refresh could never run and every session died after one hour.
+const publicPaths = [
+  '/login', '/register', '/forgot-password', '/reset-password', '/health',
+  '/api/auth/login', '/api/auth/register', '/api/auth/refresh',
+  '/api/auth/forgot-password', '/api/auth/verify-otp', '/api/auth/reset-password',
+];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;

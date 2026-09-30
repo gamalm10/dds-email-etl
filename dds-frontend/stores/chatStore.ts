@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { ChatMessage, ChatConversation, ChatCitation } from '@/types/chat';
 import api from '@/lib/api';
+import { apiFetch } from '@/lib/apiFetch';
 
 const THINKING_PLACEHOLDER = 'Analysing your question…';
 const NO_RESPONSE = 'No response received. Please try again.';
@@ -85,12 +86,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ? `v1/chat/conversations/${currentConversationId}/send`
         : 'v1/chat/send';
 
-      const res = await fetch(`/api/${url}`, {
+      const res = await apiFetch(`/api/${url}`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${localStorage.getItem('accessToken') || ''}`,
-        },
         body: JSON.stringify({ content, report_id: reportId }),
         signal: controller.signal,
       });

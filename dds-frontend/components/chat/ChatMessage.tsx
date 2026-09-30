@@ -25,13 +25,26 @@ export default function ChatMessage({ message }: { message: ChatMsg }) {
     <Box sx={{ display: 'flex', gap: 1, mb: 2, flexDirection: isUser ? 'row-reverse' : 'row', alignItems: 'flex-start' }}>
       <Box sx={{
         width: 32, height: 32, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
-        bgcolor: isUser ? 'primary.main' : 'grey.300', color: isUser ? 'white' : 'text.primary', flexShrink: 0,
+        bgcolor: isUser ? 'primary.main' : 'background.paper', color: isUser ? 'primary.contrastText' : 'text.primary', flexShrink: 0,
+        border: isUser ? 'none' : 1,
+        borderColor: 'divider',
       }}>
         {isUser ? <Person sx={{ fontSize: 18 }} /> : <SmartToy sx={{ fontSize: 18 }} />}
       </Box>
       <Box sx={{
-        maxWidth: '80%', p: 1.5, borderRadius: 2,
-        bgcolor: isUser ? 'primary.main' : 'grey.100', color: isUser ? 'white' : 'text.primary',
+        width: 'fit-content',
+        maxWidth: '80%',
+        minWidth: 0,
+        p: 1.5,
+        borderRadius: 2,
+        // Theme-aware colours. Hardcoding grey.100 left white text on a white
+        // bubble in dark mode, where text.primary is white.
+        bgcolor: isUser ? 'primary.main' : 'background.paper',
+        color: isUser ? 'primary.contrastText' : 'text.primary',
+        border: isUser ? 'none' : 1,
+        borderColor: 'divider',
+        overflowWrap: 'anywhere',
+        wordBreak: 'break-word',
       }}>
         {isPending ? (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, color: 'text.secondary' }}>
@@ -39,7 +52,7 @@ export default function ChatMessage({ message }: { message: ChatMsg }) {
             <Typography variant="body2">{THINKING_PLACEHOLDER}</Typography>
           </Box>
         ) : (
-          <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
+          <Typography variant="body2" component="div" sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
             {message.content}
           </Typography>
         )}

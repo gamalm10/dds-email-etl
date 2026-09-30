@@ -1,5 +1,6 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { useAuthStore } from '@/stores/authStore';
+import { redirectToLogin, refreshAccessToken } from '@/lib/apiFetch';
 
 const api = axios.create({
   baseURL: '/api/',
@@ -20,30 +21,14 @@ api.interceptors.response.use(
   (response) => response,
   async (error: AxiosError) => {
     if (error.response?.status === 401 && typeof window !== 'undefined') {
-      const store = useAuthStore.getState();
-      if (store.refreshToken) {
-        try {
-          const res = await fetch('/api/auth/refresh', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ refreshToken: store.refreshToken }),
-          });
-          if (res.ok) {
-            const data = await res.json();
-            store.setTokens(data.accessToken, data.refreshToken);
-            if (error.config) {
-              error.config.headers.Authorization = `Bearer ${data.accessToken}`;
-              return api(error.config);
-            }
-          }
-        } catch {
-          store.logout();
-          window.location.href = '/login?expired=true';
-        }
-      } else {
-        store.logout();
-        window.location.href = '/login?expired=true';
+      // Shared with the chat stream path so the 1 hour access token expiry is
+      // handled the same way everywhere.
+      const accessToken = await refreshAccessToken();
+      if (accessToken && error.config) {
+        error.config.headers.Authorization = `Bearer ${accessToken}`;
+        return api(error.config);
       }
+      redirectToLogin();
     }
     return Promise.reject(error);
   }
