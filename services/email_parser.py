@@ -20,6 +20,8 @@ class ParsedRow:
         comments: str = "",
         comments_ar: str = "",
         language: str = "en",
+        line_number: int | None = None,
+        table_attached: bool = False,
     ):
         self.division = division.strip()
         self.brand_category = brand_category.strip()
@@ -33,6 +35,8 @@ class ParsedRow:
         self.comments = comments.strip()
         self.comments_ar = comments_ar.strip()
         self.language = language
+        self.line_number = line_number
+        self.table_attached = table_attached
 
 
 class ParsedEmail:
@@ -105,6 +109,8 @@ _MILESTONE_STATUSES = [
 _ARABIC_PATTERN = re.compile(r"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]")
 _HEADER_DIVISIONS = {"division", "brand/ category", "brand/category", ""}
 _ETD_SPLIT_RE = re.compile(r'\b(\d+)\s*/\s*')
+_LINE_PREFIX_RE = re.compile(r'(?:^|\s)(\d{1,2})\s*/\s*')
+_SHARED_COMMENT_MARK = "**"
 
 
 def _is_header_row(division: str, brand_category: str) -> bool:
@@ -114,12 +120,17 @@ def _is_header_row(division: str, brand_category: str) -> bool:
     return division.lower().strip() in _HEADER_DIVISIONS or clean_brand in _HEADER_DIVISIONS
 
 
-def _split_etd_entries(text: str) -> tuple[list[str], list[str]]:
+def _split_etd_entries(text: str) -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
+    """Split an ETD cell into dated and undated entries, keeping the line number.
+
+    Returns (date_entries, no_date_entries) where each item is (line_no, text).
+    Empty line markers (e.g. the collapsed "1/ 2/" seen in some reports) are dropped.
+    """
     if not text or not _ETD_SPLIT_RE.search(text):
         return ([], [])
 
-    date_entries: list[str] = []
-    no_date_entries: list[str] = []
+    date_entries: list[tuple[int, str]] = []
+    no_date_entries: list[tuple[int, str]] = []
 
     parts = _ETD_SPLIT_RE.split(text)
     if not parts or parts[0].strip():
@@ -129,12 +140,18 @@ def _split_etd_entries(text: str) -> tuple[list[str], list[str]]:
     while i < len(parts) - 1:
         num = parts[i]
         entry = parts[i + 1].strip()
+        i += 2
+        if not entry:
+            continue
+        try:
+            line_no = int(num)
+        except ValueError:
+            continue
         if re.search(r'\d{2}\.\d{2}', entry):
             cleaned = re.sub(r'\s+', ' ', entry).strip().rstrip(' -TBCtbc')
-            date_entries.append(cleaned)
+            date_entries.append((line_no, cleaned))
         else:
-            no_date_entries.append(f"{num}/ {entry}")
-        i += 2
+            no_date_entries.append((line_no, f"{num}/ {entry}"))
 
     return (date_entries, no_date_entries)
 
@@ -217,6 +234,103 @@ def _has_arabic(text: str) -> bool:
     return bool(_ARABIC_PATTERN.search(text))
 
 
+def _normalise_cell(text: str) -> str:
+    return re.sub(r'\s+', ' ', text or '').strip()
+
+
+def _is_table_attached(text: str) -> bool:
+    cleaned = _normalise_cell(text).lower().rstrip('.')
+    return cleaned in {"table attached", "table attach", "attached table", "see attached table"}
+
+
+def parse_comment_lines(text: str) -> tuple[dict[int, str], str]:
+    """Split a Comments/Actions cell into per-line comments plus a shared comment.
+
+    - "1/ one 2/ two"      -> ({1: "one", 2: "two"}, "")
+    - "** applies to all"  -> ({}, "applies to all")
+    - plain text           -> ({}, "plain text")
+    """
+    cleaned = _normalise_cell(text)
+    if not cleaned:
+        return {}, ""
+
+    if cleaned.startswith(_SHARED_COMMENT_MARK):
+        shared = cleaned.replace(_SHARED_COMMENT_MARK, " ")
+        return {}, _normalise_cell(shared)
+
+    if not re.match(r'^\d{1,2}\s*/', cleaned):
+        return {}, cleaned
+
+    parts = _LINE_PREFIX_RE.split(cleaned)
+    lines: dict[int, str] = {}
+    for i in range(1, len(parts) - 1, 2):
+        try:
+            line_no = int(parts[i])
+        except ValueError:
+            continue
+        body = _normalise_cell(parts[i + 1])
+        if body:
+            lines[line_no] = body
+    return lines, ""
+
+
+def resolve_line_comment(
+    line_no: int,
+    lines: dict[int, str],
+    shared: str,
+    fallback_lines: dict[int, str] | None = None,
+    fallback_shared: str = "",
+) -> str:
+    if line_no in lines:
+        return lines[line_no]
+    if shared:
+        return shared
+    if fallback_lines and line_no in fallback_lines:
+        return fallback_lines[line_no]
+    if fallback_shared:
+        return fallback_shared
+    return ""
+
+
+def _table_month(table) -> str:
+    first = table.find("tr")
+    if not first:
+        return ""
+    header = first.get_text(" ", strip=True)
+    m = re.search(r'availability\s+status\s*\(\s*([A-Za-z]{3,9})\s*\)', header, re.IGNORECASE)
+    return m.group(1).upper() if m else ""
+
+
+def _build_table_attached_fallbacks(soup, main_table, month: str) -> dict[str, tuple[dict[int, str], str]]:
+    """Collect per-brand comments from sibling tables of the same reporting month.
+
+    The main table defers some brands to "Table attached"; those rows are detailed
+    in another table of the same month that is nested in the forward chain.
+    """
+    fallbacks: dict[str, tuple[dict[int, str], str]] = {}
+    if not month:
+        return fallbacks
+
+    for table in soup.find_all("table"):
+        if table is main_table or _table_month(table) != month:
+            continue
+        for tr in table.find_all("tr"):
+            cells = tr.find_all("td")
+            if len(cells) < 6:
+                continue
+            brand = _normalise_cell(cells[1].get_text(" ", strip=True))
+            if not brand or _is_header_row(_normalise_cell(cells[0].get_text(" ", strip=True)), brand):
+                continue
+            comment_text = cells[5].get_text(" ", strip=True)
+            if not _normalise_cell(comment_text) or _is_table_attached(comment_text):
+                continue
+            lines, shared = parse_comment_lines(comment_text)
+            if lines or shared:
+                fallbacks[brand] = (lines, shared)
+
+    return fallbacks
+
+
 def _detect_language(*texts: str) -> str:
     has_ar = False
     has_en = False
@@ -283,20 +397,27 @@ def parse_email(raw_bytes: bytes) -> ParsedEmail:
         return parsed
 
     soup = BeautifulSoup(html_body, "html.parser")
-    tables = soup.find_all("table")
-    main_table = None
-    for t in tables:
-        text = t.get_text(" ", strip=True)
-        if "Division" in text and "Brand" in text:
-            main_table = t
-            break
+    main_table = find_main_table(soup)
     if not main_table:
         return parsed
 
-    rows = main_table.find_all("tr")
+    build_rows_from_table(soup, main_table, parsed)
+    return parsed
+
+
+def find_main_table(soup):
+    for t in soup.find_all("table"):
+        text = t.get_text(" ", strip=True)
+        if "Division" in text and "Brand" in text:
+            return t
+    return None
+
+
+def build_rows_from_table(soup, main_table, parsed: ParsedEmail) -> None:
+    fallbacks = _build_table_attached_fallbacks(soup, main_table, _table_month(main_table))
     current_division = ""
 
-    for tr in rows:
+    for tr in main_table.find_all("tr"):
         cells = tr.find_all("td")
         if len(cells) < 4:
             continue
@@ -326,26 +447,38 @@ def parse_email(raw_bytes: bytes) -> ParsedEmail:
         if len(cells) > 4:
             etd_raw = cells[4].get_text(" ", strip=True)
 
+        comments_raw = ""
         if len(cells) > 5:
-            row.comments = cells[5].get_text(" ", strip=True)
+            comments_raw = cells[5].get_text(" ", strip=True)
 
-        language = _detect_language(row.milestone, row.comments)
+        table_attached = _is_table_attached(comments_raw)
+        row.comments = "" if table_attached else comments_raw
+        row.comments_ar = ""
+        row.table_attached = table_attached
+
+        if not row.brand_category or _is_header_row(row.division, row.brand_category):
+            continue
+
+        fb_lines, fb_shared = fallbacks.get(row.brand_category, ({}, ""))
+        cmt_lines, cmt_shared = parse_comment_lines(comments_raw)
+        if table_attached:
+            cmt_lines, cmt_shared = {}, ""
+
+        language = _detect_language(row.milestone, row.comments, comments_raw)
         row.language = language
 
         if language in ("ar", "mixed"):
             if _has_arabic(row.milestone):
                 row.milestone_ar = row.milestone
-            if _has_arabic(row.comments):
-                row.comments_ar = row.comments
-
-        if not row.brand_category or _is_header_row(row.division, row.brand_category):
-            continue
+            if _has_arabic(comments_raw):
+                row.comments_ar = comments_raw
 
         date_entries, no_date_entries = _split_etd_entries(etd_raw)
         if len(date_entries) > 1:
             milestone_parts = _split_milestones(row.milestone, len(date_entries))
-            for idx, (etd_entry, ms) in enumerate(zip(date_entries, milestone_parts), 1):
+            for idx, ((line_no, etd_entry), ms) in enumerate(zip(date_entries, milestone_parts), 1):
                 etd, eta, ready = _split_etd_eta_ready(etd_entry)
+                comment = resolve_line_comment(line_no, cmt_lines, cmt_shared, fb_lines, fb_shared)
                 r = ParsedRow(
                     division=row.division,
                     brand_category=f"{row.brand_category}-#{idx}",
@@ -356,12 +489,14 @@ def parse_email(raw_bytes: bytes) -> ParsedEmail:
                     etd=etd,
                     eta=eta,
                     ready_for_sale=ready,
-                    comments=row.comments,
-                    comments_ar=row.comments_ar,
+                    comments=comment,
+                    comments_ar=row.comments_ar if _has_arabic(comment) else "",
                     language=language,
+                    line_number=line_no,
+                    table_attached=table_attached and not comment,
                 )
                 parsed.rows.append(r)
-            for note in no_date_entries:
+            for _, note in no_date_entries:
                 parsed.future_etd_notes.append((row.brand_category, note))
         else:
             etd, eta, ready = _split_etd_eta_ready(etd_raw)
@@ -369,11 +504,16 @@ def parse_email(raw_bytes: bytes) -> ParsedEmail:
             row.etd = etd
             row.eta = eta
             row.ready_for_sale = ready
+            single = _split_etd_entries(etd_raw)[0]
+            if single:
+                row.line_number = single[0][0]
+            row.comments = resolve_line_comment(
+                row.line_number, cmt_lines, cmt_shared, fb_lines, fb_shared
+            )
+            row.comments_ar = row.comments if _has_arabic(row.comments) else ""
             parsed.rows.append(row)
-            for note in no_date_entries:
+            for _, note in no_date_entries:
                 parsed.future_etd_notes.append((row.brand_category, note))
-
-    return parsed
 
 
 def parse_clearance_materials(text: str) -> list[dict]:
