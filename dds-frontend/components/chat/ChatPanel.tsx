@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Box, Typography, IconButton, Drawer, List, ListItem, ListItemButton,
-  ListItemText, Tooltip, Badge, Fab,
+  ListItemText, Tooltip, Badge, Fab, useMediaQuery, useTheme,
 } from '@mui/material';
 import {
   Chat as ChatIcon, Close, Add, History, Fullscreen, FullscreenExit,
@@ -14,6 +14,9 @@ import ChatInput from './ChatInput';
 const DEFAULT_WIDTH = 400;
 const MIN_WIDTH = 320;
 const WIDTH_KEY = 'chat.width';
+// Matches DRAWER_WIDTH in app/(dashboard)/layout.tsx — the left menu width that
+// must stay visible when the chat is maximized on desktop.
+const MENU_WIDTH = 260;
 
 function formatDateTime(value: string | null): string {
   if (!value) return '';
@@ -35,16 +38,29 @@ export default function ChatPanel() {
     currentConversationId, reportId,
     loadConversations, selectConversation, sendMessage, startNew,
   } = useChatStore();
+  const theme = useTheme();
+  const isDesktop = useMediaQuery(theme.breakpoints.up('md'));
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [width, setWidth] = useState(DEFAULT_WIDTH);
   const [maximized, setMaximized] = useState(false);
 
+  const maxAllowed = () => window.innerWidth - (isDesktop ? MENU_WIDTH : 0);
+
   useEffect(() => {
-    const saved = typeof window !== 'undefined' ? window.localStorage.getItem(WIDTH_KEY) : null;
-    const n = saved ? parseInt(saved, 10) : NaN;
-    if (!Number.isNaN(n) && n >= MIN_WIDTH) setWidth(n);
-  }, []);
+    const maxW = maxAllowed();
+    const saved = parseInt(window.localStorage.getItem(WIDTH_KEY) || '', 10);
+    const base = Number.isNaN(saved) ? DEFAULT_WIDTH : saved;
+    setWidth(Math.min(Math.max(base, MIN_WIDTH), Math.max(maxW, MIN_WIDTH)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDesktop]);
+
+  useEffect(() => {
+    const onResize = () => setWidth((w) => Math.min(w, Math.max(maxAllowed(), MIN_WIDTH)));
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDesktop]);
 
   useEffect(() => { if (isOpen) loadConversations(); }, [isOpen, loadConversations]);
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
@@ -52,7 +68,7 @@ export default function ChatPanel() {
   const startResize = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     const onMove = (ev: MouseEvent) => {
-      const next = Math.min(Math.max(window.innerWidth - ev.clientX, MIN_WIDTH), window.innerWidth);
+      const next = Math.min(Math.max(window.innerWidth - ev.clientX, MIN_WIDTH), maxAllowed());
       setMaximized(false);
       setWidth(next);
     };
@@ -66,7 +82,21 @@ export default function ChatPanel() {
     };
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDesktop]);
+
+  const maximizedWidth = isDesktop ? `calc(100vw - ${MENU_WIDTH}px)` : '100vw';
+
+  // Clicking a link inside the chat navigates to a page; shrink the panel to its
+  // minimum so the destination is visible (the panel stays open).
+  const minimizeForLink = (e: React.MouseEvent) => {
+    const anchor = (e.target as HTMLElement | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
+    if (!anchor) return;
+    if ((anchor.getAttribute('href') || '').startsWith('/')) {
+      setMaximized(false);
+      setWidth(MIN_WIDTH);
+    }
+  };
 
   return (
     <>
@@ -77,8 +107,8 @@ export default function ChatPanel() {
         </Fab>
       </Tooltip>
 
-      <Drawer anchor="right" open={isOpen} onClose={() => setOpen(false)}
-        sx={{ '& .MuiDrawer-paper': { width: maximized ? '100vw' : width, maxWidth: '100vw', display: 'flex', flexDirection: 'column' } }}>
+      <Drawer anchor="right" variant="persistent" open={isOpen}
+        sx={{ '& .MuiDrawer-paper': { width: maximized ? maximizedWidth : width, maxWidth: '100vw', display: 'flex', flexDirection: 'column' } }}>
         {!maximized && (
           <Box onMouseDown={startResize} title="Drag to resize"
             sx={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 6, cursor: 'col-resize', zIndex: 2, '&:hover': { bgcolor: 'primary.main', opacity: 0.4 } }} />
@@ -119,7 +149,7 @@ export default function ChatPanel() {
           </Box>
         )}
 
-        <Box sx={{ flex: 1, overflow: 'auto', p: 2 }}>
+        <Box sx={{ flex: 1, overflow: 'auto', p: 2 }} onClick={minimizeForLink}>
           {messages.length === 0 && (
             <Box sx={{ textAlign: 'center', mt: 4, color: 'text.secondary' }}>
               <ChatIcon sx={{ fontSize: 48, mb: 1, opacity: 0.3 }} />

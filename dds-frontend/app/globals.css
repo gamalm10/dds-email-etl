@@ -35,25 +35,36 @@ a {
   unicode-bidi: plaintext;
 }
 
-/* Deep-link target highlight (see lib/useHighlight.ts) */
+/* Deep-link target highlight (see lib/useHighlight.ts).
+   .hl-flash blinks a few times to draw attention, then stops;
+   .hl-mark is the persistent static highlight that stays until the user
+   navigates away or clicks another link. */
 @keyframes hl-pulse {
-  0%, 100% { background-color: rgba(255, 167, 38, 0.25); }
-  50% { background-color: rgba(255, 167, 38, 0.7); }
+  0%, 100% { background-color: rgba(255, 167, 38, 0.35); }
+  50% { background-color: rgba(255, 167, 38, 0.85); }
+}
+
+.hl-flash {
+  animation: hl-pulse 0.8s ease-in-out 3;
+}
+
+tr.hl-flash > td {
+  animation: hl-pulse 0.8s ease-in-out 3;
 }
 
 /* Doubled class raises specificity above MUI's .MuiPaper-root / cell styles. */
-.hl-flash.hl-flash {
-  animation: hl-pulse 1s ease-in-out 4;
+.hl-mark.hl-mark {
+  background-color: rgba(255, 167, 38, 0.35);
   box-shadow: 0 0 0 2px #ff9800;
   border-radius: 4px;
 }
 
-tr.hl-flash.hl-flash {
+tr.hl-mark.hl-mark {
   box-shadow: none;
   outline: 2px solid #ff9800;
   outline-offset: -2px;
 }
 
-tr.hl-flash.hl-flash > td {
-  animation: hl-pulse 1s ease-in-out 4;
+tr.hl-mark.hl-mark > td {
+  background-color: rgba(255, 167, 38, 0.35);
 }

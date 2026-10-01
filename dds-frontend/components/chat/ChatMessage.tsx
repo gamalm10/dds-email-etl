@@ -1,7 +1,10 @@
 'use client';
+import Link from 'next/link';
 import { Box, Typography, Chip, CircularProgress } from '@mui/material';
 import { SmartToy, Person } from '@mui/icons-material';
 import { ChatMessage as ChatMsg, ChatCitation } from '@/types/chat';
+import MarkdownMessage from './MarkdownMessage';
+import VerifyPanel from './VerifyPanel';
 
 const THINKING_PLACEHOLDER = 'Analysing your question…';
 
@@ -26,10 +29,15 @@ function CitationChips({ citations }: { citations: ChatCitation[] }) {
   if (linked.length === 0) return null;
   return (
     <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 1 }}>
-      {linked.map((c, i) => (
-        <Chip key={i} label={c.label} size="small" component="a" href={citationHref(c) || undefined}
-          clickable sx={{ fontSize: '0.7rem', height: 20 }} />
-      ))}
+      {linked.map((c, i) => {
+        const href = citationHref(c);
+        if (!href) return null;
+        // Next Link keeps navigation client-side so the open chat survives.
+        return (
+          <Chip key={i} label={c.label} size="small" component={Link} href={href}
+            clickable sx={{ fontSize: '0.7rem', height: 20 }} />
+        );
+      })}
     </Box>
   );
 }
@@ -50,8 +58,9 @@ export default function ChatMessage({ message }: { message: ChatMsg }) {
         {isUser ? <Person sx={{ fontSize: 18 }} /> : <SmartToy sx={{ fontSize: 18 }} />}
       </Box>
       <Box sx={{
-        width: 'fit-content',
-        maxWidth: '80%',
+        width: isUser ? 'fit-content' : 'auto',
+        maxWidth: isUser ? '80%' : '100%',
+        flex: isUser ? undefined : 1,
         minWidth: 0,
         p: 1.5,
         borderRadius: 2,
@@ -69,13 +78,18 @@ export default function ChatMessage({ message }: { message: ChatMsg }) {
             <CircularProgress size={14} />
             <Typography variant="body2">{THINKING_PLACEHOLDER}</Typography>
           </Box>
-        ) : (
+        ) : isUser ? (
           <Typography variant="body2" component="div" sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
             {message.content}
           </Typography>
+        ) : (
+          <MarkdownMessage content={message.content} />
         )}
         {!isUser && message.citations && message.citations.length > 0 && (
           <CitationChips citations={message.citations} />
+        )}
+        {!isUser && message.citations && message.citations.length > 0 && (
+          <VerifyPanel citations={message.citations} />
         )}
         {timestamp && (
           <Typography variant="caption" sx={{
