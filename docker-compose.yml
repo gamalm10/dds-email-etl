@@ -18,10 +18,10 @@ services:
     image: mariadb:11
     env_file: .env
     environment:
-      MARIADB_ROOT_PASSWORD: ${MARIA_ROOT_PASSWORD:-rootpass}
+      MARIADB_ROOT_PASSWORD: ${MARIA_ROOT_PASSWORD:?MARIA_ROOT_PASSWORD is required}
       MARIADB_DATABASE: ${MARIA_DATABASE:-dds}
       MARIADB_USER: ${MARIA_USER:-dds}
-      MARIADB_PASSWORD: ${MARIA_PASSWORD:-ddspass}
+      MARIADB_PASSWORD: ${MARIA_PASSWORD:?MARIA_PASSWORD is required}
     ports:
       - "3307:3306"
     volumes:

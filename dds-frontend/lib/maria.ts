@@ -4,7 +4,7 @@ const pool = mysql.createPool({
   host: process.env.MARIA_HOST || 'localhost',
   port: parseInt(process.env.MARIA_PORT || '3307'),
   user: process.env.MARIA_USER || 'dds',
-  password: process.env.MARIA_PASSWORD || 'ddspass',
+  password: process.env.MARIA_PASSWORD || '',
   database: process.env.MARIA_DATABASE || 'dds',
   waitForConnections: true,
   connectionLimit: 10,
