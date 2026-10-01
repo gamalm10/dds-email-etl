@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import {
   Box, Typography, Card, CardContent, Tabs, Tab, Chip, IconButton, CircularProgress,
   Grid, Paper, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
@@ -11,6 +11,7 @@ import InsightTimeline from '@/components/insights/InsightTimeline';
 import ReportTimeline from '@/components/vendors/ReportTimeline';
 import BackButton from '@/components/common/BackButton';
 import { navigate } from '@/components/common/navigate';
+import { useHighlightTarget } from '@/lib/useHighlight';
 
 export default function BrandDetailPage() {
   const params = useParams();
@@ -45,6 +46,17 @@ export default function BrandDetailPage() {
 
   useEffect(() => { fetchAll(); }, [params.id]);
 
+  const hl = useSearchParams().get('hl');
+
+  useEffect(() => {
+    if (!data || !hl) return;
+    if (hl.startsWith('report-')) setTab(1);
+    else if (hl.startsWith('task-')) setTab(3);
+    else if (hl.startsWith('brand-')) setTab(0);
+  }, [data, hl]);
+
+  useHighlightTarget();
+
   if (loading) return <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}><CircularProgress /></Box>;
   if (!data?.brand) return <Typography>Brand not found</Typography>;
 
@@ -64,7 +76,7 @@ export default function BrandDetailPage() {
         <IconButton onClick={fetchAll}><Refresh /></IconButton>
       </Box>
 
-      <Card sx={{ mb: 3 }}>
+      <Card id={`hl-brand-${brand.id}`} sx={{ mb: 3 }}>
         <CardContent sx={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
           {data.items.length > 0 && (
             <Chip label={data.items[0].availability_status} size="small" sx={{ bgcolor: getStatusColor(data.items[0].availability_status), color: 'white' }} />
@@ -116,7 +128,7 @@ export default function BrandDetailPage() {
                 </TableHead>
                 <TableBody>
                   {history.map((h: any) => (
-                    <TableRow key={h.item_id} hover sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/reports/${h.report_id}`)}>
+                    <TableRow key={h.item_id} id={`hl-report-${h.report_id}`} hover sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/reports/${h.report_id}?hl=report-${h.report_id}`)}>
                       <TableCell>{h.report_date}</TableCell>
                       <TableCell><Chip label={h.availability_status} size="small" sx={{ bgcolor: getStatusColor(h.availability_status), color: 'white' }} /></TableCell>
                       <TableCell>{h.milestone || '-'}</TableCell>
@@ -175,7 +187,7 @@ export default function BrandDetailPage() {
                 </TableHead>
                 <TableBody>
                   {data.tasks.map((t: any) => (
-                    <TableRow key={t.id} hover sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/tasks/${t.id}`)}>
+                    <TableRow key={t.id} id={`hl-task-${t.id}`} hover sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/tasks/${t.id}?hl=task-${t.id}`)}>
                       <TableCell>{t.description}</TableCell>
                       <TableCell>{t.assigned_to || '-'}</TableCell>
                       <TableCell>{t.category || '-'}</TableCell>

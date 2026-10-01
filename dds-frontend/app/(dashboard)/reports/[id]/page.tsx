@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState, useCallback } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import {
   Box, Card, CardContent, Typography, Chip, Tabs, Tab, Grid, IconButton, Button, CircularProgress,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Accordion, AccordionSummary, AccordionDetails,
@@ -16,12 +16,14 @@ import DeltaSection from '@/components/reports/DeltaSection';
 import OriginalEmailModal from '@/components/reports/OriginalEmailModal';
 import BackButton from '@/components/common/BackButton';
 import { navigate } from '@/components/common/navigate';
+import { useHighlightTarget } from '@/lib/useHighlight';
 import { exportReportPDF, exportReportExcel } from '@/lib/export';
 import type { Report, RiskLanguage, PaymentTerm, LeadTime, Negotiation } from '@/types/report';
 
 export default function ReportDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const hl = useSearchParams().get('hl');
   const [report, setReport] = useState<Report | null>(null);
   const [risks, setRisks] = useState<RiskLanguage[]>([]);
   const [payments, setPayments] = useState<PaymentTerm[]>([]);
@@ -75,6 +77,16 @@ export default function ReportDetailPage() {
 
   useEffect(() => { fetchReport(); }, [fetchReport]);
 
+  useEffect(() => {
+    if (!report || !hl) return;
+    if (hl.startsWith('item-')) setTab(0);
+    else if (hl.startsWith('action-')) setTab(2);
+    else if (hl.startsWith('task-')) setTab(4);
+    else setTab(0);
+  }, [report, hl]);
+
+  useHighlightTarget();
+
   if (loading) return <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}><CircularProgress /></Box>;
   if (!report) return <Typography>Report not found</Typography>;
 
@@ -112,7 +124,7 @@ export default function ReportDetailPage() {
         <IconButton onClick={fetchReport}><Refresh /></IconButton>
       </Box>
 
-      <Card sx={{ mb: 3 }}>
+      <Card id={`hl-report-${report.id}`} sx={{ mb: 3 }}>
         <CardContent sx={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
           <Box><Typography variant="h6">{report.items.length}</Typography><Typography variant="caption">Items</Typography></Box>
           <Box><Typography variant="h6">{report.insights.length}</Typography><Typography variant="caption">Insights</Typography></Box>
@@ -163,8 +175,8 @@ export default function ReportDetailPage() {
                 </TableHead>
                 <TableBody>
                   {report.items.map((item) => (
-                    <TableRow key={item.id} hover>
-                      <TableCell sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/brands/${item.brand.id}`)}>
+                    <TableRow key={item.id} id={`hl-item-${item.id}`} hover>
+                      <TableCell sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/brands/${item.brand.id}?hl=brand-${item.brand.id}`)}>
                         <Typography variant="body2" fontWeight={600} color="primary">{item.brand.brand_category}</Typography>
                         <Typography variant="caption">{item.brand.division}</Typography>
                       </TableCell>
@@ -256,7 +268,7 @@ export default function ReportDetailPage() {
                 </TableHead>
                 <TableBody>
                   {report.priority_actions.map((a) => (
-                    <TableRow key={a.id} hover sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/actions/${a.id}`)}>
+                    <TableRow key={a.id} id={`hl-action-${a.id}`} hover sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/actions/${a.id}?hl=action-${a.id}`)}>
                       <TableCell><Chip label={a.person} size="small" color="primary" variant="outlined" /></TableCell>
                       <TableCell>{a.action}</TableCell>
                       <TableCell dir="rtl" style={{ fontFamily: 'Segoe UI, Tahoma, sans-serif', textAlign: 'right' }}>
@@ -389,7 +401,7 @@ export default function ReportDetailPage() {
                 </TableHead>
                 <TableBody>
                   {report.items.flatMap((item) => item.tasks).slice(0, 30).map((t) => (
-                    <TableRow key={t.id} hover sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/tasks/${t.id}`)}>
+                    <TableRow key={t.id} id={`hl-task-${t.id}`} hover sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/tasks/${t.id}?hl=task-${t.id}`)}>
                       <TableCell>{t.task_description}</TableCell>
                       <TableCell>{t.assigned_to || '-'}</TableCell>
                       <TableCell>{t.task_category || '-'}</TableCell>

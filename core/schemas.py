@@ -38,7 +38,13 @@ class InsightOut(BaseModel):
     anomaly_score: float | None = None
     brand_id: int | None = None
     brand_name: str | None = None
+    brand_category: str | None = None
+    report_id: int | None = None
     report_date: str | None = None
+    report_subject: str | None = None
+    report_item_id: int | None = None
+    vendor: str | None = None
+    language: str | None = None
     impact: str | None = None
     recommendation: str | None = None
     risk_tags: str | None = None
@@ -281,6 +287,7 @@ class ProcessResponse(BaseModel):
 class ChatMessageCreate(BaseModel):
     content: str
     report_id: int | None = None
+    new_conversation: bool = False
 
 
 class ChatMessageOut(BaseModel):

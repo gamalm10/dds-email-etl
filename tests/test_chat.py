@@ -1,6 +1,8 @@
 import pytest
 
+from core.models import ChatConversation
 from services.analysis import _render
+from services.chat_service import _touch_conversation, get_or_create_conversation
 from services.sidecar_manager import SidecarError, SidecarManager
 
 
@@ -87,3 +89,61 @@ def test_render_handles_empty_analysis():
 
 def test_sidecar_error_is_exception():
     assert issubclass(SidecarError, Exception)
+
+
+class _FakeResult:
+    def __init__(self, value):
+        self._value = value
+
+    def scalar_one_or_none(self):
+        return self._value
+
+
+class _FakeSession:
+    def __init__(self, existing=None):
+        self.existing = existing
+        self.added = []
+        self.flush_count = 0
+
+    async def execute(self, stmt):
+        return _FakeResult(self.existing)
+
+    def add(self, obj):
+        self.added.append(obj)
+
+    async def flush(self):
+        self.flush_count += 1
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_conversation_reuses_latest_by_default():
+    existing = ChatConversation(id=5, user_id=1, report_id=None)
+    db = _FakeSession(existing)
+
+    conv = await get_or_create_conversation(db, 1, None)
+
+    assert conv is existing
+    assert db.added == []
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_conversation_force_new_ignores_existing():
+    existing = ChatConversation(id=5, user_id=1, report_id=None)
+    db = _FakeSession(existing)
+
+    conv = await get_or_create_conversation(db, 1, None, force_new=True)
+
+    assert conv is not existing
+    assert conv.user_id == 1
+    assert conv.report_id is None
+    assert conv in db.added
+    assert db.flush_count == 1
+
+
+def test_touch_conversation_advances_updated_at():
+    conv = ChatConversation(id=5, user_id=1, report_id=None)
+    assert conv.updated_at is None
+
+    _touch_conversation(conv)
+
+    assert conv.updated_at is not None

@@ -4,7 +4,7 @@ from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import func, select, text
+from sqlalchemy import and_, func, select, text
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1038,19 +1038,60 @@ async def task_details(task_id: int, db: AsyncSession = Depends(get_db)):
     }
 
 
+def _insight_row(
+    ins: Insight,
+    brand_category: str | None,
+    report_date,
+    report_subject: str | None,
+    report_item_id: int | None,
+) -> dict:
+    return {
+        "id": ins.id,
+        "insight_type": ins.insight_type,
+        "description": ins.description,
+        "description_ar": ins.description_ar,
+        "severity": ins.severity,
+        "anomaly_score": float(ins.anomaly_score) if ins.anomaly_score is not None else None,
+        "brand_id": ins.brand_id,
+        "brand_name": brand_category,
+        "brand_category": brand_category,
+        "report_id": ins.report_id,
+        "report_date": report_date.isoformat() if report_date else None,
+        "report_subject": report_subject,
+        "report_item_id": report_item_id,
+        "vendor": ins.vendor,
+        "language": ins.language,
+        "impact": ins.impact,
+        "recommendation": ins.recommendation,
+        "risk_tags": ins.risk_tags,
+    }
+
+
 @router.get("/insights", response_model=list[InsightOut])
 async def list_insights(
     insight_type: str | None = Query(None),
     severity: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
-    stmt = select(Insight)
+    stmt = (
+        select(Insight, Brand.brand_category, Report.report_date, Report.subject, ReportItem.id)
+        .join(Brand, Insight.brand_id == Brand.id)
+        .join(Report, Insight.report_id == Report.id)
+        .join(
+            ReportItem,
+            and_(ReportItem.report_id == Insight.report_id, ReportItem.brand_id == Insight.brand_id),
+        )
+    )
     if insight_type:
         stmt = stmt.where(Insight.insight_type == insight_type)
     if severity:
         stmt = stmt.where(Insight.severity == severity)
-    stmt = stmt.order_by(Insight.id.desc()).limit(100)
-    return (await db.execute(stmt)).scalars().all()
+    stmt = stmt.order_by(Insight.id.desc()).limit(500)
+    rows = (await db.execute(stmt)).all()
+    return [
+        _insight_row(ins, brand_category, rdate, rsubj, item_id)
+        for ins, brand_category, rdate, rsubj, item_id in rows
+    ]
 
 
 @router.get("/insights/trends")
@@ -1088,15 +1129,22 @@ async def insight_details(insight_id: int, db: AsyncSession = Depends(get_db)):
         )
     )).scalars().all()
 
+    report_item_id = (await db.execute(
+        select(ReportItem.id)
+        .where(ReportItem.report_id == ins.report_id, ReportItem.brand_id == ins.brand_id)
+        .limit(1)
+    )).scalar_one_or_none()
+
     return {
         "insight": {
             "id": ins.id, "insight_type": ins.insight_type, "description": ins.description,
             "severity": ins.severity, "impact": ins.impact, "recommendation": ins.recommendation,
             "risk_tags": ins.risk_tags, "anomaly_score": ins.anomaly_score,
-            "language": ins.language, "description_ar": ins.description_ar,
+            "language": ins.language, "description_ar": ins.description_ar, "vendor": ins.vendor,
         },
         "brand": {"id": brand.id, "division": brand.division, "brand_category": brand.brand_category} if brand else None,
         "report": {"id": ins.report_id, "date": rdate.isoformat() if rdate else None, "subject": rsubj},
+        "report_item_id": report_item_id,
         "anomalies": [{"id": a.id, "similarity_score": float(a.similarity_score)} for a in related_anomalies],
     }
 

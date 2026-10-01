@@ -10,7 +10,13 @@ function CitationChips({ citations }: { citations: ChatCitation[] }) {
     <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 1 }}>
       {citations.map((c, i) => (
         <Chip key={i} label={c.label} size="small" component="a"
-          href={c.type === 'report_item' ? `/reports/${c.report_id}` : `/${c.type === 'task' ? 'tasks' : 'insights'}/${c.id}`}
+          href={
+            c.type === 'report_item'
+              ? `/reports/${c.report_id}?hl=item-${c.id}`
+              : c.type === 'task'
+                ? `/tasks/${c.id}?hl=task-${c.id}`
+                : `/insights/${c.id}?hl=insight-${c.id}`
+          }
           clickable sx={{ fontSize: '0.7rem', height: 20 }} />
       ))}
     </Box>

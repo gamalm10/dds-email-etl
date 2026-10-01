@@ -14,6 +14,7 @@ interface ChatState {
   isStreaming: boolean;
   isThinking: boolean;
   reportId: number | null;
+  pendingNewConversation: boolean;
 
   setOpen: (open: boolean) => void;
   setReportContext: (reportId: number | null) => void;
@@ -33,9 +34,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
   isStreaming: false,
   isThinking: false,
   reportId: null,
+  pendingNewConversation: false,
 
   setOpen: (open) => set({ isOpen: open }),
-  setReportContext: (reportId) => set({ reportId, currentConversationId: null, messages: [] }),
+  setReportContext: (reportId) =>
+    set({ reportId, currentConversationId: null, messages: [], pendingNewConversation: false }),
 
   loadConversations: async () => {
     try {
@@ -49,14 +52,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
   selectConversation: async (id) => {
     try {
       const res = await api.get(`v1/chat/conversations/${id}/messages`);
-      set({ currentConversationId: id, messages: res.data.messages });
+      set({ currentConversationId: id, messages: res.data.messages, pendingNewConversation: false });
     } catch (e) {
       console.error('Failed to load messages', e);
     }
   },
 
   sendMessage: async (content) => {
-    const { currentConversationId, reportId, messages } = get();
+    const { currentConversationId, reportId, messages, pendingNewConversation } = get();
 
     inFlight?.abort();
     const controller = new AbortController();
@@ -70,7 +73,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
       id: replyId, role: 'assistant', content: THINKING_PLACEHOLDER,
       created_at: new Date().toISOString(),
     };
-    set({ messages: [...messages, userMsg, assistantMsg], isStreaming: true, isThinking: true });
+    set({
+      messages: [...messages, userMsg, assistantMsg],
+      isStreaming: true,
+      isThinking: true,
+      pendingNewConversation: false,
+    });
 
     const patchReply = (fn: (m: ChatMessage) => ChatMessage) => {
       const msgs = [...get().messages];
@@ -88,7 +96,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       const res = await apiFetch(`/api/${url}`, {
         method: 'POST',
-        body: JSON.stringify({ content, report_id: reportId }),
+        body: JSON.stringify({
+          content,
+          report_id: reportId,
+          new_conversation: pendingNewConversation,
+        }),
         signal: controller.signal,
       });
 
@@ -163,6 +175,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   startNew: () => {
     inFlight?.abort();
-    set({ currentConversationId: null, messages: [] });
+    set({ currentConversationId: null, messages: [], pendingNewConversation: true });
   },
 }));

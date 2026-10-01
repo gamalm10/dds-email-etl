@@ -6,6 +6,7 @@ import { Refresh } from '@mui/icons-material';
 import api from '@/lib/api';
 import BackButton from '@/components/common/BackButton';
 import { navigate } from '@/components/common/navigate';
+import { useHighlightTarget } from '@/lib/useHighlight';
 
 export default function ActionDetailPage() {
   const params = useParams();
@@ -23,6 +24,8 @@ export default function ActionDetailPage() {
   };
 
   useEffect(() => { fetch(); }, [params.id]);
+
+  useHighlightTarget();
 
   if (loading) return <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}><CircularProgress /></Box>;
   if (!data?.action) return <Typography>Action not found</Typography>;
@@ -45,7 +48,7 @@ export default function ActionDetailPage() {
         <IconButton onClick={fetch}><Refresh /></IconButton>
       </Box>
 
-      <Card sx={{ mb: 3 }}>
+      <Card id={`hl-action-${a.id}`} sx={{ mb: 3 }}>
         <CardContent sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
           <Box><Typography variant="caption">Person</Typography><Chip label={a.person} size="small" color="primary" /></Box>
           <Box><Typography variant="caption">Urgency</Typography><Chip label={a.urgency || 'medium'} size="small" sx={{ bgcolor: urgencyColors[a.urgency] || '#9E9E9E', color: 'white' }} /></Box>
@@ -56,7 +59,7 @@ export default function ActionDetailPage() {
       <Grid container spacing={2} mb={3}>
         {data.report && (
           <Grid item xs={12} md={6}>
-            <Card variant="outlined" sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/reports/${data.report.id}`)}>
+            <Card variant="outlined" sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/reports/${data.report.id}?hl=report-${data.report.id}`)}>
               <CardContent>
                 <Typography variant="caption" color="text.secondary">Report</Typography>
                 <Typography variant="body2" fontWeight={600} color="primary">{data.report.date}</Typography>
@@ -97,7 +100,7 @@ export default function ActionDetailPage() {
               </TableHead>
               <TableBody>
                 {data.occurrences.map((o: any) => (
-                  <TableRow key={o.id} hover sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/reports/${o.report_id}`)}>
+                  <TableRow key={o.id} id={`hl-report-${o.report_id}`} hover sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/reports/${o.report_id}?hl=report-${o.report_id}`)}>
                     <TableCell>{o.report_date}</TableCell>
                     <TableCell>{o.action}</TableCell>
                     <TableCell><Chip label={o.urgency || 'medium'} size="small" sx={{ bgcolor: urgencyColors[o.urgency] || '#9E9E9E', color: 'white', height: 20, fontSize: 10 }} /></TableCell>

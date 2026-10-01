@@ -38,7 +38,7 @@ export default function InsightsPage() {
         </ToggleButtonGroup>
       </Card>
       {loading ? <CircularProgress /> : (
-        insights.map((i) => <InsightCard key={i.id} insight={i} compact />)
+        insights.map((i) => <InsightCard key={i.id} insight={i} />)
       )}
       {!loading && insights.length === 0 && <Typography color="text.secondary">No insights found</Typography>}
     </Box>

@@ -1,0 +1,91 @@
+version: '3.7'
+
+services:
+  dds-db:
+    image: registry2.onehealthnetwork.net/dds-db:${DDS_TAG:-v1}
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIA_ROOT_PASSWORD}
+      MARIADB_DATABASE: ${MARIA_DATABASE}
+      MARIADB_USER: ${MARIA_USER}
+      MARIADB_PASSWORD: ${MARIA_PASSWORD}
+      TZ: Africa/Cairo
+    volumes:
+      - dds_db_data:/var/lib/mysql
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--su=mysql", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+
+  dds-api:
+    image: registry2.onehealthnetwork.net/dds-api:${DDS_TAG:-v1}
+    environment:
+      MARIA_HOST: dds-db
+      MARIA_PORT: "3306"
+      MARIA_USER: ${MARIA_USER}
+      MARIA_PASSWORD: ${MARIA_PASSWORD}
+      MARIA_DATABASE: ${MARIA_DATABASE}
+      IMAP_HOST: ${IMAP_HOST}
+      IMAP_PORT: ${IMAP_PORT}
+      IMAP_USER: ${IMAP_USER}
+      IMAP_PASSWORD: ${IMAP_PASSWORD}
+      EMAIL_SENDER_FILTER: ${EMAIL_SENDER_FILTER}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      NOTIFY_RECIPIENTS: ${NOTIFY_RECIPIENTS}
+      NOTIFY_RATE_LIMIT_HOURS: ${NOTIFY_RATE_LIMIT_HOURS}
+      JWT_SECRET: ${JWT_SECRET}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      PI_SIDECAR_CMD: npx @earendil-works/pi-coding-agent --mode rpc --no-session
+      PI_TIMEOUT_SECONDS: "120"
+      TZ: Africa/Cairo
+    networks:
+      - backend
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  dds-frontend:
+    image: registry2.onehealthnetwork.net/dds-frontend:${DDS_TAG:-v1}
+    environment:
+      NEXT_PUBLIC_API_URL: http://dds-api:8000
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      MARIA_HOST: dds-db
+      MARIA_PORT: "3306"
+      MARIA_USER: ${MARIA_USER}
+      MARIA_PASSWORD: ${MARIA_PASSWORD}
+      MARIA_DATABASE: ${MARIA_DATABASE}
+    networks:
+      - backend
+      - proxy
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    labels:
+      - "caddy=dds.a-part.com"
+      - "caddy.reverse_proxy={{upstreams 3000}}"
+      - "caddy.tls=true"
+      - "caddy.tls.certresolver=http"
+
+networks:
+  proxy:
+    external: true
+  backend:
+    external: true
+
+volumes:
+  dds_db_data:

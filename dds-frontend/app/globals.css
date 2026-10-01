@@ -34,3 +34,26 @@ a {
   direction: rtl;
   unicode-bidi: plaintext;
 }
+
+/* Deep-link target highlight (see lib/useHighlight.ts) */
+@keyframes hl-pulse {
+  0%, 100% { background-color: rgba(255, 167, 38, 0.25); }
+  50% { background-color: rgba(255, 167, 38, 0.7); }
+}
+
+/* Doubled class raises specificity above MUI's .MuiPaper-root / cell styles. */
+.hl-flash.hl-flash {
+  animation: hl-pulse 1s ease-in-out 4;
+  box-shadow: 0 0 0 2px #ff9800;
+  border-radius: 4px;
+}
+
+tr.hl-flash.hl-flash {
+  box-shadow: none;
+  outline: 2px solid #ff9800;
+  outline-offset: -2px;
+}
+
+tr.hl-flash.hl-flash > td {
+  animation: hl-pulse 1s ease-in-out 4;
+}

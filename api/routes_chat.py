@@ -71,7 +71,9 @@ async def send_chat_message(
     user_id: int = Depends(get_current_user_id),
 ):
     async def event_stream():
-        async for chunk in send_message_stream(db, sidecar, user_id, body.content, body.report_id):
+        async for chunk in send_message_stream(
+            db, sidecar, user_id, body.content, body.report_id, new_conversation=body.new_conversation
+        ):
             yield chunk
 
     return StreamingResponse(

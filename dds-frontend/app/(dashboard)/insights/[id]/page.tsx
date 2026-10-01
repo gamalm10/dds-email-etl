@@ -6,6 +6,7 @@ import { Refresh } from '@mui/icons-material';
 import api from '@/lib/api';
 import BackButton from '@/components/common/BackButton';
 import { navigate } from '@/components/common/navigate';
+import { useHighlightTarget } from '@/lib/useHighlight';
 
 export default function InsightDetailPage() {
   const params = useParams();
@@ -24,6 +25,8 @@ export default function InsightDetailPage() {
 
   useEffect(() => { fetch(); }, [params.id]);
 
+  useHighlightTarget();
+
   if (loading) return <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}><CircularProgress /></Box>;
   if (!data?.insight) return <Typography>Insight not found</Typography>;
 
@@ -37,7 +40,7 @@ export default function InsightDetailPage() {
         <IconButton onClick={fetch}><Refresh /></IconButton>
       </Box>
 
-      <Card sx={{ mb: 3 }}>
+      <Card id={`hl-insight-${ins.id}`} sx={{ mb: 3 }}>
         <CardContent>
           <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 2 }}>
             {ins.severity && <Chip label={ins.severity} size="small" color={ins.severity === 'critical' ? 'error' : ins.severity === 'major' ? 'warning' : 'default'} />}
@@ -53,7 +56,7 @@ export default function InsightDetailPage() {
       <Grid container spacing={2} mb={3}>
         {data.brand && (
           <Grid item xs={12} md={6}>
-            <Card variant="outlined" sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/brands/${data.brand.id}`)}>
+            <Card variant="outlined" sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/brands/${data.brand.id}?hl=brand-${data.brand.id}`)}>
               <CardContent>
                 <Typography variant="caption" color="text.secondary">Brand/Category</Typography>
                 <Typography variant="body2" fontWeight={600} color="primary">{data.brand.brand_category}</Typography>
@@ -64,11 +67,21 @@ export default function InsightDetailPage() {
         )}
         {data.report && (
           <Grid item xs={12} md={6}>
-            <Card variant="outlined" sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/reports/${data.report.id}`)}>
+            <Card variant="outlined" sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/reports/${data.report.id}?hl=report-${data.report.id}`)}>
               <CardContent>
                 <Typography variant="caption" color="text.secondary">Report</Typography>
                 <Typography variant="body2" fontWeight={600} color="primary">{data.report.date}</Typography>
                 <Typography variant="caption">{data.report.subject}</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        )}
+        {data.report_item_id != null && data.report && (
+          <Grid item xs={12} md={6}>
+            <Card variant="outlined" sx={{ cursor: 'pointer' }} onClick={() => navigate(router, `/reports/${data.report.id}?hl=item-${data.report_item_id}`)}>
+              <CardContent>
+                <Typography variant="caption" color="text.secondary">Report Item</Typography>
+                <Typography variant="body2" fontWeight={600} color="primary">Item #{data.report_item_id}</Typography>
               </CardContent>
             </Card>
           </Grid>

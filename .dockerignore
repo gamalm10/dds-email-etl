@@ -11,6 +11,9 @@ __pycache__/
 AGENTS.md
 ANCHORED_SUMMARY.md
 docs/
+emails/
+tests/
+deploy/dds_dump.sql
 
 dds-frontend/node_modules/
 dds-frontend/.next/

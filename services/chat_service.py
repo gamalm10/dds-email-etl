@@ -84,18 +84,23 @@ def _extract_citations(results) -> list[dict]:
     ]
 
 
+def _touch_conversation(conv: ChatConversation) -> None:
+    conv.updated_at = func.now()
+
+
 async def get_or_create_conversation(
-    db: AsyncSession, user_id: int, report_id: int | None = None
+    db: AsyncSession, user_id: int, report_id: int | None = None, force_new: bool = False
 ) -> ChatConversation:
-    stmt = (
-        select(ChatConversation)
-        .where(ChatConversation.user_id == user_id, ChatConversation.report_id == report_id)
-        .order_by(ChatConversation.updated_at.desc())
-        .limit(1)
-    )
-    conv = (await db.execute(stmt)).scalar_one_or_none()
-    if conv:
-        return conv
+    if not force_new:
+        stmt = (
+            select(ChatConversation)
+            .where(ChatConversation.user_id == user_id, ChatConversation.report_id == report_id)
+            .order_by(ChatConversation.updated_at.desc())
+            .limit(1)
+        )
+        conv = (await db.execute(stmt)).scalar_one_or_none()
+        if conv:
+            return conv
     conv = ChatConversation(user_id=user_id, report_id=report_id)
     db.add(conv)
     await db.flush()
@@ -146,13 +151,14 @@ async def send_message_stream(
     content: str,
     report_id: int | None = None,
     conversation_id: int | None = None,
+    new_conversation: bool = False,
 ) -> AsyncGenerator[str, None]:
     if conversation_id:
         conv = await db.get(ChatConversation, conversation_id)
         if not conv or conv.user_id != user_id:
-            conv = await get_or_create_conversation(db, user_id, report_id)
+            conv = await get_or_create_conversation(db, user_id, report_id, force_new=new_conversation)
     else:
-        conv = await get_or_create_conversation(db, user_id, report_id)
+        conv = await get_or_create_conversation(db, user_id, report_id, force_new=new_conversation)
 
     user_msg = ChatMessage(conversation_id=conv.id, role="user", content=content)
     db.add(user_msg)
@@ -160,6 +166,7 @@ async def send_message_stream(
 
     if not conv.title and content:
         conv.title = content[:80]
+    _touch_conversation(conv)
     await db.flush()
 
     yield json.dumps({"type": "metadata", "conversation_id": conv.id}) + "\n"
