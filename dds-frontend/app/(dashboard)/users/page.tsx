@@ -34,7 +34,7 @@ export default function UsersPage() {
       if (editUser.id) {
         await api.put(`v1/users/${editUser.id}`, editUser);
       } else {
-        await api.post('auth/register', editUser);
+        await api.post('v1/users', editUser);
       }
       setDialog(false);
       fetchUsers();

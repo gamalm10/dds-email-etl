@@ -60,10 +60,6 @@ function LoginForm() {
               <Typography component="a" href="/forgot-password" color="primary" variant="body2" sx={{ cursor: 'pointer' }}>Forgot password?</Typography>
             </Box>
           </Box>
-          <Typography variant="body2" align="center" sx={{ mt: 2 }}>
-            Don&apos;t have an account?{' '}
-            <Typography component="a" href="/register" color="primary" sx={{ cursor: 'pointer', fontWeight: 600 }}>Register</Typography>
-          </Typography>
         </CardContent>
       </Card>
     </Box>

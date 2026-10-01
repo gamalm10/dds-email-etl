@@ -6,8 +6,8 @@ import type { NextRequest } from 'next/server';
 // expired. Without it listed here the middleware rejected it with 401, so the
 // refresh could never run and every session died after one hour.
 const publicPaths = [
-  '/login', '/register', '/forgot-password', '/reset-password', '/health',
-  '/api/auth/login', '/api/auth/register', '/api/auth/refresh',
+  '/login', '/forgot-password', '/reset-password', '/health',
+  '/api/auth/login', '/api/auth/refresh',
   '/api/auth/forgot-password', '/api/auth/verify-otp', '/api/auth/reset-password',
 ];
 

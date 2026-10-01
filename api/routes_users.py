@@ -53,6 +53,29 @@ class RoleOut(BaseModel):
         from_attributes = True
 
 
+async def require_admin(request: Request, db: AsyncSession = Depends(get_db)) -> User:
+    """Only an authenticated user whose role is 'admin' may manage users."""
+    auth_header = request.headers.get("authorization", "")
+    token = auth_header.replace("Bearer ", "").strip()
+    if not token:
+        raise HTTPException(401, "Authentication required")
+    try:
+        payload = jwt.decode(token, get_settings().jwt_secret, algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(401, "Token has expired. Please log in again.")
+    except jwt.InvalidTokenError:
+        raise HTTPException(401, "Invalid token")
+
+    user_id = payload.get("userId")
+    user = await db.get(User, int(user_id)) if user_id else None
+    if not user:
+        raise HTTPException(401, "User not found")
+    role = await db.get(Role, user.role_id)
+    if not role or role.name != "admin":
+        raise HTTPException(403, "Admin access required")
+    return user
+
+
 async def _user_to_out(user: User, db: AsyncSession) -> UserOut:
     role = await db.get(Role, user.role_id)
     return UserOut(
@@ -65,14 +88,14 @@ async def _user_to_out(user: User, db: AsyncSession) -> UserOut:
     )
 
 
-@router.get("/users", response_model=list[UserOut])
+@router.get("/users", response_model=list[UserOut], dependencies=[Depends(require_admin)])
 async def list_users(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).order_by(User.id))
     users = result.scalars().all()
     return [await _user_to_out(u, db) for u in users]
 
 
-@router.post("/users", response_model=UserOut)
+@router.post("/users", response_model=UserOut, dependencies=[Depends(require_admin)])
 async def create_user(body: UserCreate, db: AsyncSession = Depends(get_db)):
     existing = await db.execute(
         select(User).where((User.username == body.username) | (User.email == body.email))
@@ -99,7 +122,7 @@ async def create_user(body: UserCreate, db: AsyncSession = Depends(get_db)):
     return await _user_to_out(user, db)
 
 
-@router.put("/users/{user_id}", response_model=UserOut)
+@router.put("/users/{user_id}", response_model=UserOut, dependencies=[Depends(require_admin)])
 async def update_user(user_id: int, body: UserUpdate, db: AsyncSession = Depends(get_db)):
     user = await db.get(User, user_id)
     if not user:
@@ -123,7 +146,7 @@ async def update_user(user_id: int, body: UserUpdate, db: AsyncSession = Depends
     return await _user_to_out(user, db)
 
 
-@router.delete("/users/{user_id}")
+@router.delete("/users/{user_id}", dependencies=[Depends(require_admin)])
 async def delete_user(user_id: int, db: AsyncSession = Depends(get_db)):
     user = await db.get(User, user_id)
     if not user:
@@ -133,7 +156,7 @@ async def delete_user(user_id: int, db: AsyncSession = Depends(get_db)):
     return {"success": True, "message": "User deleted"}
 
 
-@router.get("/roles", response_model=list[RoleOut])
+@router.get("/roles", response_model=list[RoleOut], dependencies=[Depends(require_admin)])
 async def list_roles(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Role).order_by(Role.id))
     return result.scalars().all()
