@@ -19,6 +19,13 @@ CHAT_SYSTEM_PROMPT_PATH = "pi/chat_prompt.md"
 CHUNK_DELAY_SECONDS = 0.05
 _BOUNDARY_RE = re.compile(r"[.!?](?=\s|$)\s+|\n")
 
+# Only strongly-matched results of linkable types become citations, so the UI
+# never shows unrelated chips (structured search gives baseline scores even when
+# nothing matched) or links to types the chat has no destination for.
+CITATION_MIN_SCORE = 0.6
+MAX_CITATIONS = 6
+CITATION_TYPES = {"report_item", "task", "insight"}
+
 
 def chunk_for_streaming(text: str, min_chars: int = 48) -> list[str]:
     """Split an answer into readable chunks so the UI can render it progressively.
@@ -73,15 +80,27 @@ def _build_context_block(results) -> str:
 
 
 def _extract_citations(results) -> list[dict]:
-    return [
-        {
+    ranked = sorted(
+        (r for r in results if r.source_type in CITATION_TYPES and r.score >= CITATION_MIN_SCORE),
+        key=lambda r: r.score,
+        reverse=True,
+    )
+    seen: set[tuple[str, int]] = set()
+    citations: list[dict] = []
+    for r in ranked:
+        key = (r.source_type, r.source_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        citations.append({
             "type": r.source_type,
             "id": r.source_id,
             "report_id": r.report_id,
             "label": f"{r.source_type.replace('_', ' ').title()} #{r.source_id}" + (f" ({r.brand_name})" if r.brand_name else ""),
-        }
-        for r in results
-    ]
+        })
+        if len(citations) >= MAX_CITATIONS:
+            break
+    return citations
 
 
 def _touch_conversation(conv: ChatConversation) -> None:

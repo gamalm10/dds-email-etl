@@ -15,6 +15,7 @@ import { ThemeProvider } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import { createTheme } from '@mui/material/styles';
 import { useAuthStore } from '@/stores/authStore';
+import { useChatStore } from '@/stores/chatStore';
 import api from '@/lib/api';
 import { useThemeStore } from '@/stores/themeStore';
 import { useNotificationStore } from '@/stores/notificationStore';
@@ -93,6 +94,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   const handleLogout = async () => {
     try { await fetch('/api/auth/logout', { method: 'POST', body: JSON.stringify({ refreshToken: useAuthStore.getState().refreshToken }) }); } catch {}
+    useChatStore.getState().reset();
     logout();
     router.push('/login');
   };

@@ -6,6 +6,7 @@ import {
 } from '@mui/material';
 import { Email, Lock, Visibility, VisibilityOff } from '@mui/icons-material';
 import { useAuthStore } from '@/stores/authStore';
+import { useChatStore } from '@/stores/chatStore';
 import api from '@/lib/api';
 
 function LoginForm() {
@@ -25,6 +26,7 @@ function LoginForm() {
     setError('');
     try {
       const res = await api.post('auth/login', { email, password });
+      useChatStore.getState().reset();
       login(res.data.user, res.data.access_token, res.data.refresh_token);
       router.push('/');
     } catch (err: any) {

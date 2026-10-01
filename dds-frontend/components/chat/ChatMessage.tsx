@@ -5,18 +5,29 @@ import { ChatMessage as ChatMsg, ChatCitation } from '@/types/chat';
 
 const THINKING_PLACEHOLDER = 'Analysing your question…';
 
+function citationHref(c: ChatCitation): string | null {
+  if (c.type === 'report_item') return `/reports/${c.report_id}?hl=item-${c.id}`;
+  if (c.type === 'task') return `/tasks/${c.id}?hl=task-${c.id}`;
+  if (c.type === 'insight') return `/insights/${c.id}?hl=insight-${c.id}`;
+  return null;
+}
+
+function formatTimestamp(value: string): string {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  const sameDay = d.toDateString() === new Date().toDateString();
+  return sameDay
+    ? d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleString(undefined, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
 function CitationChips({ citations }: { citations: ChatCitation[] }) {
+  const linked = citations.filter((c) => citationHref(c) !== null);
+  if (linked.length === 0) return null;
   return (
     <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 1 }}>
-      {citations.map((c, i) => (
-        <Chip key={i} label={c.label} size="small" component="a"
-          href={
-            c.type === 'report_item'
-              ? `/reports/${c.report_id}?hl=item-${c.id}`
-              : c.type === 'task'
-                ? `/tasks/${c.id}?hl=task-${c.id}`
-                : `/insights/${c.id}?hl=insight-${c.id}`
-          }
+      {linked.map((c, i) => (
+        <Chip key={i} label={c.label} size="small" component="a" href={citationHref(c) || undefined}
           clickable sx={{ fontSize: '0.7rem', height: 20 }} />
       ))}
     </Box>
@@ -26,6 +37,7 @@ function CitationChips({ citations }: { citations: ChatCitation[] }) {
 export default function ChatMessage({ message }: { message: ChatMsg }) {
   const isUser = message.role === 'user';
   const isPending = !isUser && message.content === THINKING_PLACEHOLDER;
+  const timestamp = formatTimestamp(message.created_at);
 
   return (
     <Box sx={{ display: 'flex', gap: 1, mb: 2, flexDirection: isUser ? 'row-reverse' : 'row', alignItems: 'flex-start' }}>
@@ -64,6 +76,15 @@ export default function ChatMessage({ message }: { message: ChatMsg }) {
         )}
         {!isUser && message.citations && message.citations.length > 0 && (
           <CitationChips citations={message.citations} />
+        )}
+        {timestamp && (
+          <Typography variant="caption" sx={{
+            display: 'block', mt: 0.5, fontSize: '0.65rem', opacity: 0.7,
+            color: isUser ? 'primary.contrastText' : 'text.secondary',
+            textAlign: isUser ? 'right' : 'left',
+          }}>
+            {timestamp}
+          </Typography>
         )}
       </Box>
     </Box>

@@ -1,13 +1,33 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Box, Typography, IconButton, Drawer, List, ListItem, ListItemButton,
   ListItemText, Tooltip, Badge, Fab,
 } from '@mui/material';
-import { Chat as ChatIcon, Close, Add, History } from '@mui/icons-material';
+import {
+  Chat as ChatIcon, Close, Add, History, Fullscreen, FullscreenExit,
+} from '@mui/icons-material';
 import { useChatStore } from '@/stores/chatStore';
 import ChatMessageComponent from './ChatMessage';
 import ChatInput from './ChatInput';
+
+const DEFAULT_WIDTH = 400;
+const MIN_WIDTH = 320;
+const WIDTH_KEY = 'chat.width';
+
+function formatDateTime(value: string | null): string {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString(undefined, {
+    day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+  });
+}
+
+function pairCount(messageCount: number): number {
+  // Each exchange is one user question + one assistant answer.
+  return Math.ceil((messageCount || 0) / 2);
+}
 
 export default function ChatPanel() {
   const {
@@ -17,9 +37,36 @@ export default function ChatPanel() {
   } = useChatStore();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [width, setWidth] = useState(DEFAULT_WIDTH);
+  const [maximized, setMaximized] = useState(false);
+
+  useEffect(() => {
+    const saved = typeof window !== 'undefined' ? window.localStorage.getItem(WIDTH_KEY) : null;
+    const n = saved ? parseInt(saved, 10) : NaN;
+    if (!Number.isNaN(n) && n >= MIN_WIDTH) setWidth(n);
+  }, []);
 
   useEffect(() => { if (isOpen) loadConversations(); }, [isOpen, loadConversations]);
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
+  const startResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const onMove = (ev: MouseEvent) => {
+      const next = Math.min(Math.max(window.innerWidth - ev.clientX, MIN_WIDTH), window.innerWidth);
+      setMaximized(false);
+      setWidth(next);
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      setWidth((w) => {
+        try { window.localStorage.setItem(WIDTH_KEY, String(Math.round(w))); } catch {}
+        return w;
+      });
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }, []);
 
   return (
     <>
@@ -31,29 +78,43 @@ export default function ChatPanel() {
       </Tooltip>
 
       <Drawer anchor="right" open={isOpen} onClose={() => setOpen(false)}
-        sx={{ '& .MuiDrawer-paper': { width: 400, display: 'flex', flexDirection: 'column' } }}>
+        sx={{ '& .MuiDrawer-paper': { width: maximized ? '100vw' : width, maxWidth: '100vw', display: 'flex', flexDirection: 'column' } }}>
+        {!maximized && (
+          <Box onMouseDown={startResize} title="Drag to resize"
+            sx={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 6, cursor: 'col-resize', zIndex: 2, '&:hover': { bgcolor: 'primary.main', opacity: 0.4 } }} />
+        )}
+
         <Box sx={{ p: 1.5, display: 'flex', alignItems: 'center', borderBottom: 1, borderColor: 'divider' }}>
           <IconButton onClick={() => setShowHistory(!showHistory)} size="small"><History /></IconButton>
-          <Typography variant="subtitle1" sx={{ flex: 1, fontWeight: 600, ml: 1 }}>
+          <Typography variant="subtitle1" noWrap sx={{ flex: 1, fontWeight: 600, ml: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {reportId ? `Report #${reportId} Chat` : 'DDS Chat'}
           </Typography>
-          <IconButton onClick={startNew} size="small" sx={{ mr: 1 }}><Add /></IconButton>
+          <Tooltip title={maximized ? 'Restore' : 'Maximize'}>
+            <IconButton onClick={() => setMaximized((m) => !m)} size="small" sx={{ mr: 0.5 }}>
+              {maximized ? <FullscreenExit /> : <Fullscreen />}
+            </IconButton>
+          </Tooltip>
+          <IconButton onClick={startNew} size="small" sx={{ mr: 0.5 }}><Add /></IconButton>
           <IconButton onClick={() => setOpen(false)} size="small"><Close /></IconButton>
         </Box>
 
         {showHistory && (
-          <Box sx={{ maxHeight: 200, overflow: 'auto', borderBottom: 1, borderColor: 'divider' }}>
+          <Box sx={{ maxHeight: 220, overflow: 'auto', borderBottom: 1, borderColor: 'divider' }}>
             <List dense>
-              {conversations.map((conv) => (
-                <ListItem key={conv.id} disablePadding>
-                  <ListItemButton selected={conv.id === currentConversationId}
-                    onClick={() => { selectConversation(conv.id); setShowHistory(false); }}>
-                    <ListItemText primary={conv.title || 'New Chat'}
-                      secondary={`${conv.message_count} messages`}
-                      primaryTypographyProps={{ variant: 'body2', noWrap: true }} />
-                  </ListItemButton>
-                </ListItem>
-              ))}
+              {conversations.map((conv) => {
+                const pairs = pairCount(conv.message_count);
+                return (
+                  <ListItem key={conv.id} disablePadding>
+                    <ListItemButton selected={conv.id === currentConversationId}
+                      onClick={() => { selectConversation(conv.id); setShowHistory(false); }}>
+                      <ListItemText primary={conv.title || 'New Chat'}
+                        secondary={`${pairs} message${pairs === 1 ? '' : 's'} · ${formatDateTime(conv.updated_at || conv.created_at)}`}
+                        primaryTypographyProps={{ variant: 'body2', noWrap: true }}
+                        secondaryTypographyProps={{ variant: 'caption', noWrap: true }} />
+                    </ListItemButton>
+                  </ListItem>
+                );
+              })}
             </List>
           </Box>
         )}

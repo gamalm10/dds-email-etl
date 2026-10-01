@@ -1,5 +1,7 @@
 import pytest
+from fastapi import HTTPException
 
+from api.routes_chat import get_messages
 from core.models import ChatConversation
 from services.analysis import _render
 from services.chat_service import _touch_conversation, get_or_create_conversation
@@ -147,3 +149,29 @@ def test_touch_conversation_advances_updated_at():
     _touch_conversation(conv)
 
     assert conv.updated_at is not None
+
+
+class _FakeGetSession:
+    def __init__(self, conv):
+        self._conv = conv
+
+    async def get(self, model, pk):
+        return self._conv
+
+
+@pytest.mark.asyncio
+async def test_get_messages_404_when_not_owner():
+    conv = ChatConversation(id=5, user_id=2, report_id=None)
+
+    with pytest.raises(HTTPException) as exc:
+        await get_messages(5, db=_FakeGetSession(conv), user_id=1)
+
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_messages_404_when_missing():
+    with pytest.raises(HTTPException) as exc:
+        await get_messages(5, db=_FakeGetSession(None), user_id=1)
+
+    assert exc.value.status_code == 404

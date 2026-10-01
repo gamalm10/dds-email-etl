@@ -56,9 +56,13 @@ async def get_conversations(
 
 
 @router.get("/conversations/{conversation_id}/messages")
-async def get_messages(conversation_id: int, db: AsyncSession = Depends(get_db)):
+async def get_messages(
+    conversation_id: int,
+    db: AsyncSession = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+):
     conv = await db.get(ChatConversation, conversation_id)
-    if not conv:
+    if not conv or conv.user_id != user_id:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return {"messages": await get_conversation_messages(db, conversation_id)}
 

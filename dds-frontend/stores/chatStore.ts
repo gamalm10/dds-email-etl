@@ -22,6 +22,7 @@ interface ChatState {
   selectConversation: (id: number) => Promise<void>;
   sendMessage: (content: string) => Promise<void>;
   startNew: () => void;
+  reset: () => void;
 }
 
 let inFlight: AbortController | null = null;
@@ -176,5 +177,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
   startNew: () => {
     inFlight?.abort();
     set({ currentConversationId: null, messages: [], pendingNewConversation: true });
+  },
+
+  // Called on login/logout so a different user never inherits the previous
+  // user's conversations or messages.
+  reset: () => {
+    inFlight?.abort();
+    set({
+      conversations: [],
+      currentConversationId: null,
+      messages: [],
+      isStreaming: false,
+      isThinking: false,
+      reportId: null,
+      pendingNewConversation: false,
+    });
   },
 }));
