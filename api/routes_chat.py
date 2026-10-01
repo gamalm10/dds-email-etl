@@ -10,12 +10,13 @@ from api.routes import get_sidecar
 from config.settings import get_settings
 from core.database import get_db
 from core.models import ChatConversation, Report
-from core.schemas import ChatMessageCreate
+from core.schemas import ChatMessageCreate, ChatVerifyRequest
 from services.chat_service import (
     get_conversation_messages,
     list_conversations,
     send_message_stream,
 )
+from services.chat_verify import verify_citations
 from services.embedding_service import embed_all_reports, embed_report
 from services.sidecar_manager import SidecarManager
 
@@ -65,6 +66,16 @@ async def get_messages(
     if not conv or conv.user_id != user_id:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return {"messages": await get_conversation_messages(db, conversation_id)}
+
+
+@router.post("/verify")
+async def verify_chat_answer(
+    body: ChatVerifyRequest,
+    db: AsyncSession = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+):
+    citations = [c.model_dump() for c in body.citations]
+    return {"records": await verify_citations(db, citations)}
 
 
 @router.post("/send")

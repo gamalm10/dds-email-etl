@@ -290,6 +290,17 @@ class ChatMessageCreate(BaseModel):
     new_conversation: bool = False
 
 
+class ChatCitationIn(BaseModel):
+    type: str
+    id: int
+    report_id: int | None = None
+    label: str | None = None
+
+
+class ChatVerifyRequest(BaseModel):
+    citations: list[ChatCitationIn] = []
+
+
 class ChatMessageOut(BaseModel):
     id: int
     role: str
