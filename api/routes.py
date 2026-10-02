@@ -970,7 +970,11 @@ async def list_tasks(
     category: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
-    stmt = select(Task)
+    stmt = (
+        select(Task, Report.report_date)
+        .join(ReportItem, Task.report_item_id == ReportItem.id)
+        .join(Report, ReportItem.report_id == Report.id)
+    )
     if assigned_to:
         stmt = stmt.where(Task.assigned_to.ilike(f"%{assigned_to}%"))
     if status:
@@ -978,20 +982,38 @@ async def list_tasks(
     if category:
         stmt = stmt.where(Task.task_category == category)
     stmt = stmt.order_by(Task.occurrence_count.desc()).limit(100)
-    return (await db.execute(stmt)).scalars().all()
+    rows = (await db.execute(stmt)).all()
+    return [
+        {
+            "id": t.id, "task_description": t.task_description, "assigned_to": t.assigned_to,
+            "deadline": t.deadline, "task_category": t.task_category, "task_status": t.task_status,
+            "priority": t.priority, "occurrence_count": t.occurrence_count, "is_resolved": t.is_resolved,
+            "request_date": rdate.isoformat() if rdate else None,
+        }
+        for t, rdate in rows
+    ]
 
 
 @router.get("/tasks/aging", response_model=list[TaskOut])
 async def aging_tasks(db: AsyncSession = Depends(get_db)):
-    tasks = (
+    rows = (
         await db.execute(
-            select(Task).where(
-                Task.occurrence_count >= 3,
-                Task.is_resolved == False,
-            ).order_by(Task.occurrence_count.desc())
+            select(Task, Report.report_date)
+            .join(ReportItem, Task.report_item_id == ReportItem.id)
+            .join(Report, ReportItem.report_id == Report.id)
+            .where(Task.occurrence_count >= 3, Task.is_resolved == False)
+            .order_by(Task.occurrence_count.desc())
         )
-    ).scalars().all()
-    return tasks
+    ).all()
+    return [
+        {
+            "id": t.id, "task_description": t.task_description, "assigned_to": t.assigned_to,
+            "deadline": t.deadline, "task_category": t.task_category, "task_status": t.task_status,
+            "priority": t.priority, "occurrence_count": t.occurrence_count, "is_resolved": t.is_resolved,
+            "request_date": rdate.isoformat() if rdate else None,
+        }
+        for t, rdate in rows
+    ]
 
 
 @router.get("/tasks/{task_id}/details")
@@ -1059,6 +1081,7 @@ def _insight_row(
         "report_date": report_date.isoformat() if report_date else None,
         "report_subject": report_subject,
         "report_item_id": report_item_id,
+        "request_date": report_date.isoformat() if report_date else None,
         "vendor": ins.vendor,
         "language": ins.language,
         "impact": ins.impact,
@@ -1141,6 +1164,7 @@ async def insight_details(insight_id: int, db: AsyncSession = Depends(get_db)):
             "severity": ins.severity, "impact": ins.impact, "recommendation": ins.recommendation,
             "risk_tags": ins.risk_tags, "anomaly_score": ins.anomaly_score,
             "language": ins.language, "description_ar": ins.description_ar, "vendor": ins.vendor,
+            "request_date": rdate.isoformat() if rdate else None,
         },
         "brand": {"id": brand.id, "division": brand.division, "brand_category": brand.brand_category} if brand else None,
         "report": {"id": ins.report_id, "date": rdate.isoformat() if rdate else None, "subject": rsubj},

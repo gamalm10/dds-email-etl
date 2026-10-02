@@ -38,7 +38,7 @@ export default function TasksPage() {
     { field: 'assigned_to', headerName: 'Assignee', width: 110 },
     { field: 'priority', headerName: 'Priority', width: 80, renderCell: (p: any) => <Chip label={p.value} size="small" color={p.value === 'high' ? 'error' : p.value === 'low' ? 'default' : 'warning'} /> },
     { field: 'is_resolved', headerName: 'Status', width: 90, renderCell: (p: any) => p.value ? <Chip label="Done" size="small" color="success" /> : <Chip label="Open" size="small" color="warning" /> },
-    { field: 'report_date', headerName: 'Request Date', width: 120 },
+    { field: 'request_date', headerName: 'Request Date', width: 120 },
     { field: 'deadline', headerName: 'Deadline', width: 120 },
   ];
 

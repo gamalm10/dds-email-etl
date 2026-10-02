@@ -24,6 +24,7 @@ class TaskOut(BaseModel):
     priority: str = "medium"
     occurrence_count: int = 1
     is_resolved: bool = False
+    request_date: date | None = None
 
     class Config:
         from_attributes = True
@@ -43,6 +44,7 @@ class InsightOut(BaseModel):
     report_date: str | None = None
     report_subject: str | None = None
     report_item_id: int | None = None
+    request_date: str | None = None
     vendor: str | None = None
     language: str | None = None
     impact: str | None = None

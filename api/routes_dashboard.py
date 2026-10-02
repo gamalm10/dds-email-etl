@@ -146,6 +146,7 @@ async def dashboard_tasks(assigned_to: str | None = Query(None), db: AsyncSessio
             "is_resolved": row[7], "is_overdue": row[8],
             "brand_id": row[9], "division": row[10], "brand_category": row[11],
             "report_id": row[12], "report_date": row[13].isoformat() if row[13] else None,
+            "request_date": row[13].isoformat() if row[13] else None,
         })
     return tasks
 

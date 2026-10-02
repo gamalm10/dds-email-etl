@@ -16,6 +16,7 @@ interface InsightCardProps {
     brand_category?: string | null;
     report_id?: number | null;
     report_date?: string | null;
+    request_date?: string | null;
     report_subject?: string | null;
     report_item_id?: number | null;
     vendor?: string | null;
@@ -115,6 +116,14 @@ export default function InsightCard({ insight, onClick, compact }: InsightCardPr
             )}
           </Box>
         )}
+        {(() => {
+          const reqDate = insight.request_date || insight.report_date;
+          return reqDate ? (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+              Requested: {new Date(reqDate).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' })}
+            </Typography>
+          ) : null;
+        })()}
       </CardContent>
     </Card>
   );

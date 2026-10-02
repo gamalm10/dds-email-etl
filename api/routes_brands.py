@@ -70,7 +70,7 @@ async def brand_timeline(brand_id: int, db: AsyncSession = Depends(get_db)):
         )
         .join(Report, ReportItem.report_id == Report.id)
         .where(ReportItem.brand_id == brand_id)
-        .order_by(Report.report_date.asc())
+        .order_by(Report.report_date.desc())
     )).all()
 
     events = []
@@ -154,6 +154,7 @@ async def brand_insights_timeline(brand_id: int, db: AsyncSession = Depends(get_
             "id": r[0], "type": r[1], "description": r[2], "severity": r[3],
             "impact": r[4], "recommendation": r[5], "risk_tags": r[6],
             "report_id": r[7], "report_date": r[8].isoformat() if r[8] else None,
+            "request_date": r[8].isoformat() if r[8] else None,
             "subject": r[9],
         })
     return timeline

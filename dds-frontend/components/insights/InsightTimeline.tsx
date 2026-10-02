@@ -10,6 +10,7 @@ interface TimelineEvent {
   severity?: string | null;
   report_id: number;
   report_date?: string | null;
+  request_date?: string | null;
   impact?: string | null;
 }
 
@@ -34,7 +35,7 @@ export default function InsightTimeline({ events }: InsightTimelineProps) {
         <Box key={e.id} sx={{ display: 'flex', gap: 2, pb: 2, borderLeft: i < events.length - 1 ? '2px solid' : 'none', borderColor: 'primary.main', pl: 2 }}>
           <Box sx={{ width: 12, height: 12, borderRadius: '50%', bgcolor: severityColors[e.severity || 'info'] || '#9E9E9E', mt: 0.5, flexShrink: 0 }} />
           <Box sx={{ flex: 1, cursor: 'pointer' }} onClick={() => navigate(router, `/reports/${e.report_id}`)}>
-            <Typography variant="caption" color="text.secondary">{e.report_date}</Typography>
+            <Typography variant="caption" color="text.secondary">Requested: {e.request_date || e.report_date}</Typography>
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 0.25 }}>
               {e.severity && <Chip label={e.severity} size="small" sx={{ bgcolor: severityColors[e.severity] || '#9E9E9E', color: 'white', height: 18, fontSize: 10 }} />}
               <Typography variant="body2">{e.description || '(no description)'}</Typography>

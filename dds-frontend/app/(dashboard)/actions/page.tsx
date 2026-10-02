@@ -42,7 +42,7 @@ export default function ActionsPage() {
     { field: 'person', headerName: 'Person', width: 100, renderCell: (p: any) => <Chip label={p.value} size="small" color="primary" variant="outlined" /> },
     { field: 'category', headerName: 'Category', width: 120 },
     { field: 'urgency', headerName: 'Urgency', width: 80, renderCell: (p: any) => <Chip label={p.value} size="small" sx={{ bgcolor: urgencyColors[p.value] || '#9E9E9E', color: 'white' }} /> },
-    { field: 'report_date', headerName: 'Report Date', width: 120 },
+    { field: 'request_date', headerName: 'Request Date', width: 120 },
   ];
 
   return (

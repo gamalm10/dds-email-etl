@@ -160,6 +160,7 @@ export default function ReportTimeline({ reports, onReprocessed }: { reports: an
                                 {a.category && <Typography variant="caption" color="text.secondary">{a.category}</Typography>}
                               </Box>
                               <Typography variant="body2">{a.action}</Typography>
+                              <Typography variant="caption" color="text.secondary">Requested: {a.request_date || a.report_date}</Typography>
                               <ReportDateTimeline presentDates={a.present_dates} />
                             </Box>
                           ))}
@@ -176,6 +177,7 @@ export default function ReportTimeline({ reports, onReprocessed }: { reports: an
                                 {t.assigned_to && <Typography variant="caption" color="text.secondary">→ {t.assigned_to}</Typography>}
                               </Box>
                               <Typography variant="body2">{t.description}</Typography>
+                              <Typography variant="caption" color="text.secondary">Requested: {t.request_date || t.report_date}</Typography>
                               <ReportDateTimeline presentDates={t.present_dates} />
                               {t.deadline && <Typography variant="caption" color="text.secondary">Deadline: {t.deadline}</Typography>}
                             </Box>
@@ -224,6 +226,7 @@ export default function ReportTimeline({ reports, onReprocessed }: { reports: an
                                 <Typography variant="caption" color="text.secondary">{ins.type}</Typography>
                               </Box>
                               <Typography variant="body2">{ins.description}</Typography>
+                              <Typography variant="caption" color="text.secondary">Requested: {ins.request_date || ins.report_date}</Typography>
                               {ins.impact && <Typography variant="caption" color="text.secondary">Impact: {ins.impact}</Typography>}
                             </Box>
                           ))}

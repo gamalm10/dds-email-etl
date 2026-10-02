@@ -25,7 +25,9 @@ async def list_actions(person: str | None = Query(None), db: AsyncSession = Depe
         actions.append({
             "id": r[0], "report_id": r[1], "person": r[2], "action": r[3],
             "action_ar": r[4], "category": r[5], "urgency": r[6],
-            "report_date": r[7].isoformat() if r[7] else None, "subject": r[8],
+            "report_date": r[7].isoformat() if r[7] else None,
+            "request_date": r[7].isoformat() if r[7] else None,
+            "subject": r[8],
         })
     return actions
 
@@ -39,7 +41,7 @@ async def actions_timeline(person: str | None = Query(None), db: AsyncSession = 
     ).join(Report, PriorityAction.report_id == Report.id)
     if person:
         stmt = stmt.where(PriorityAction.person == person)
-    stmt = stmt.order_by(Report.report_date.asc())
+    stmt = stmt.order_by(Report.report_date.desc())
     rows = (await db.execute(stmt)).all()
 
     timeline = []
@@ -47,7 +49,9 @@ async def actions_timeline(person: str | None = Query(None), db: AsyncSession = 
         timeline.append({
             "id": r[0], "person": r[1], "action": r[2], "urgency": r[3],
             "category": r[4], "report_id": r[5],
-            "report_date": r[6].isoformat() if r[6] else None, "subject": r[7],
+            "report_date": r[6].isoformat() if r[6] else None,
+            "request_date": r[6].isoformat() if r[6] else None,
+            "subject": r[7],
         })
     return timeline
 
@@ -82,6 +86,7 @@ async def action_details(action_id: int, db: AsyncSession = Depends(get_db)):
         occurrences.append({
             "id": a[0], "action": a[1], "category": a[2], "urgency": a[3],
             "report_date": a[4].isoformat() if a[4] else None,
+            "request_date": a[4].isoformat() if a[4] else None,
             "subject": a[5], "report_id": a[6],
         })
 
@@ -100,7 +105,7 @@ async def action_details(action_id: int, db: AsyncSession = Depends(get_db)):
         "action": {
             "id": action.id, "person": action.person, "action": action.action,
             "action_ar": action.action_ar, "category": action.category,
-            "urgency": action.urgency,
+            "urgency": action.urgency, "request_date": rdate.isoformat() if rdate else None,
         },
         "report": {"id": action.report_id, "date": rdate.isoformat() if rdate else None, "subject": rsubj},
         "occurrences": occurrences,

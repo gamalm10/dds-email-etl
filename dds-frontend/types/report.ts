@@ -15,6 +15,7 @@ export interface Task {
   priority: string;
   occurrence_count: number;
   is_resolved: boolean;
+  request_date?: string | null;
 }
 
 export interface Insight {
@@ -24,6 +25,7 @@ export interface Insight {
   description_ar: string | null;
   severity: string | null;
   anomaly_score: number | null;
+  request_date?: string | null;
 }
 
 export interface ReportItem {
@@ -52,6 +54,7 @@ export interface PriorityAction {
   action_ar: string | null;
   category: string | null;
   urgency: string | null;
+  request_date?: string | null;
 }
 
 export interface ThreadSummary {
