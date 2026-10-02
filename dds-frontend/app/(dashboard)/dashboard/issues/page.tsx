@@ -1,9 +1,10 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Box, Typography, Card, CardContent, Chip, CircularProgress } from '@mui/material';
+import { Box, Typography, Card, CardContent, Chip } from '@mui/material';
 import api from '@/lib/api';
 import { navigate } from '@/components/common/navigate';
+import SpiralLoader from '@/components/common/SpiralLoader';
 
 export default function IssuesPage() {
   const router = useRouter();
@@ -25,7 +26,7 @@ export default function IssuesPage() {
         <Typography variant="h4">Issues</Typography>
         <Chip label={`${issues.length} found`} color="warning" size="small" />
       </Box>
-      {loading ? <CircularProgress /> : (
+      {loading ? <SpiralLoader label="Loading issues…" /> : (
         issues.map((i) => (
           <Card key={i.insight_id} variant="outlined" sx={{ mb: 1, cursor: 'pointer' }} onClick={() => navigate(router, `/reports/${i.report_id}`)}>
             <CardContent sx={{ display: 'flex', alignItems: 'flex-start', gap: 2 }}>

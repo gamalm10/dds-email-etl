@@ -2,32 +2,39 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Box, Grid, Card, CardContent, Typography, Chip, IconButton,
+  Box, Grid, Card, CardContent, Typography, Chip, IconButton, Alert,
 } from '@mui/material';
 import {
   Inventory2, AssignmentLate, Warning, TaskAlt, Refresh,
 } from '@mui/icons-material';
 import api from '@/lib/api';
 import { navigate } from '@/components/common/navigate';
+import SpiralLoader from '@/components/common/SpiralLoader';
 import type { DashboardSummary, ReportSummary } from '@/types/report';
 
 export default function DashboardPage() {
   const [dashboard, setDashboard] = useState<DashboardSummary | null>(null);
   const [reports, setReports] = useState<ReportSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const router = useRouter();
 
   const fetchData = async () => {
     setLoading(true);
+    setError('');
+    // Keep the spiral visible for a minimum time so it never flashes past.
+    const minDelay = new Promise((resolve) => setTimeout(resolve, 600));
     try {
       const [dashRes, repRes] = await Promise.all([
         api.get('v1/dashboard/summary'),
         api.get('v1/reports'),
+        minDelay,
       ]);
       setDashboard(dashRes.data);
       setReports(repRes.data.slice(0, 5));
     } catch (err) {
       console.error('Dashboard fetch error:', err);
+      setError('Failed to load dashboard data. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -48,6 +55,30 @@ export default function DashboardPage() {
     };
     return colors[status] || '#9E9E9E';
   };
+
+  if (loading) {
+    return (
+      <Box>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+          <Typography variant="h4">Dashboard</Typography>
+          <IconButton onClick={fetchData}><Refresh /></IconButton>
+        </Box>
+        <SpiralLoader label="Loading dashboard…" />
+      </Box>
+    );
+  }
+
+  if (error) {
+    return (
+      <Box>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+          <Typography variant="h4">Dashboard</Typography>
+          <IconButton onClick={fetchData}><Refresh /></IconButton>
+        </Box>
+        <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>
+      </Box>
+    );
+  }
 
   return (
     <Box>
@@ -95,10 +126,9 @@ export default function DashboardPage() {
                   <Typography variant="caption" color="text.secondary">{r.created_at ? new Date(r.created_at).toLocaleDateString() : ''}</Typography>
                 </Box>
               ))}
-              {reports.length === 0 && !loading && (
+              {reports.length === 0 && (
                 <Typography variant="body2" color="text.secondary" textAlign="center" py={4}>No reports yet. Upload an email to get started.</Typography>
               )}
-              {loading && <Typography variant="body2" color="text.secondary" textAlign="center" py={4}>Loading...</Typography>}
             </CardContent>
           </Card>
         </Grid>

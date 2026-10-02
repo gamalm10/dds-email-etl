@@ -1,9 +1,10 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Box, Typography, Card, CardContent, Chip, CircularProgress, Alert } from '@mui/material';
+import { Box, Typography, Card, CardContent, Chip, Alert } from '@mui/material';
 import api from '@/lib/api';
 import { navigate } from '@/components/common/navigate';
+import SpiralLoader from '@/components/common/SpiralLoader';
 
 export default function CriticalPage() {
   const router = useRouter();
@@ -20,7 +21,7 @@ export default function CriticalPage() {
         <Typography variant="h4">Critical Items</Typography>
         <Chip label={`${items.length} found`} color="error" size="small" />
       </Box>
-      {loading ? <CircularProgress /> : (
+      {loading ? <SpiralLoader label="Loading critical items…" /> : (
         items.map((i) => (
           <Card key={i.item_id} variant="outlined" sx={{ mb: 1, borderColor: 'error.main' }}>
             <CardContent sx={{ display: 'flex', alignItems: 'flex-start', gap: 2 }}>
