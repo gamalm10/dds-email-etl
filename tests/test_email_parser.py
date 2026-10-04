@@ -4,6 +4,7 @@ from services.email_parser import (
     _is_table_attached,
     _parse_bg_color,
     _split_etd_entries,
+    _split_etd_eta_ready,
     parse_comment_lines,
     parse_email,
     resolve_line_comment,
@@ -68,6 +69,22 @@ def test_split_etd_entries_drops_empty_line_marker():
     assert date_entries == [(2, "22.08- 22.09-07.10"), (3, "30.09-25.11-15.12")]
 
 
+def test_split_etd_eta_ready_normalises_en_dash():
+    assert _split_etd_eta_ready("30.09-20.10 \u2013 10.11") == ("30.09", "20.10", "10.11")
+
+
+def test_split_etd_eta_ready_normalises_em_dash():
+    assert _split_etd_eta_ready("30.09\u201420.10\u201410.11") == ("30.09", "20.10", "10.11")
+
+
+def test_split_etd_eta_ready_keeps_parenthetical_note():
+    assert _split_etd_eta_ready("22.08- 24.09-10.10 (Feb)") == ("22.08", "24.09", "10.10 (Feb)")
+
+
+def test_split_etd_eta_ready_ascii_hyphen_unchanged():
+    assert _split_etd_eta_ready("1/ 30.09-20.10-10.11") == ("30.09", "20.10", "10.11")
+
+
 def test_parse_comment_lines_splits_by_line():
     lines, shared = parse_comment_lines("2/On track – Costing 3/ Agreed with Supplier")
     assert shared == ""
@@ -84,6 +101,47 @@ def test_parse_comment_lines_plain_text_is_shared():
     lines, shared = parse_comment_lines("Order sent to supplier / waiting for PI- Nancy")
     assert lines == {}
     assert shared == "Order sent to supplier / waiting for PI- Nancy"
+
+
+def test_parse_comment_lines_empty_first_marker_does_not_swallow_next():
+    cell = "1/ 2/Order placed 70-80K pending - order confirmation \u2013 Max- 14.09/ ( RH price list )"
+    lines, shared = parse_comment_lines(cell)
+    assert shared == ""
+    assert lines == {2: "Order placed 70-80K pending - order confirmation \u2013 Max- 14.09/ ( RH price list )"}
+
+
+def test_parse_comment_lines_prose_before_marker_is_prepended_to_each_line():
+    cell = (
+        "we will No longer wait for e-Mark, RH created multiple errors. "
+        "1/Plan for shipment \u2013 ACID under creating - Nancy - 10.09 "
+        "2/ New order placed 70-80K pending - order confirmation \u2013 Max- 14.09"
+    )
+    lines, shared = parse_comment_lines(cell)
+    assert shared == ""
+    assert lines[1].startswith("we will No longer wait for e-Mark")
+    assert lines[1].endswith("Plan for shipment \u2013 ACID under creating - Nancy - 10.09")
+    assert lines[2].startswith("we will No longer wait for e-Mark")
+    assert lines[2].endswith("New order placed 70-80K pending - order confirmation \u2013 Max- 14.09")
+
+
+def test_parse_comment_lines_all_bodies_empty_returns_prefix_only():
+    assert parse_comment_lines("1/ 2/") == ({}, "")
+    assert parse_comment_lines("prose 1/ 2/") == ({}, "prose")
+
+
+def test_parse_comment_lines_date_like_slash_is_not_a_marker():
+    lines, shared = parse_comment_lines("Max- 14.09/ ( RH price list )")
+    assert lines == {}
+    assert shared == "Max- 14.09/ ( RH price list )"
+
+
+def test_resolve_line_comment_road_house_case():
+    cell = "1/ 2/Order placed 70-80K pending - order confirmation \u2013 Max- 14.09/ ( RH price list )"
+    lines, shared = parse_comment_lines(cell)
+    assert resolve_line_comment(1, lines, shared) == ""
+    assert resolve_line_comment(2, lines, shared) == (
+        "Order placed 70-80K pending - order confirmation \u2013 Max- 14.09/ ( RH price list )"
+    )
 
 
 def test_is_table_attached():
@@ -140,6 +198,54 @@ def test_parse_email_applies_shared_comment_to_all_lines():
     braking = [r for r in parsed.rows if r.brand_category.startswith("PHC Braking")]
     assert len(braking) == 2
     assert all(r.comments == "shipment yet to be confirmed. F/U with supplier" for r in braking)
+
+
+def test_parse_email_empty_first_comment_line_does_not_swallow_second():
+    rows = (
+        "<tr><td>Passenger</td><td>Road House</td><td></td><td>Order proposal</td>"
+        "<td>1/ 15.10-07.11-25.11 2/ 20.10-10.11-01.12</td>"
+        "<td>1/ 2/Order placed 70-80K pending - order confirmation \u2013 Max- 14.09/ ( RH price list )</td></tr>"
+    )
+    parsed = parse_email(_dds_email_html(rows))
+    rh = [r for r in parsed.rows if r.brand_category.startswith("Road House")]
+    assert len(rh) == 2
+    assert rh[0].comments == ""
+    assert rh[1].comments == "Order placed 70-80K pending - order confirmation \u2013 Max- 14.09/ ( RH price list )"
+
+
+def test_parse_email_does_not_use_sibling_comment_when_not_table_attached():
+    main = (
+        "<tr><td>Passenger</td><td>Road House</td><td></td><td>Order proposal</td>"
+        "<td>1/ 15.10-07.11-25.11 2/ 20.10-10.11-01.12</td>"
+        "<td>1/ 2/Order placed 70-80K pending</td></tr>"
+    )
+    sibling = (
+        "<table><tr><td>Division</td><td>Brand/Category</td><td>Availability Status (SEP)</td>"
+        "<td>Milestone</td><td>ETD-ETA-Ready for Sale</td><td>Comments/Actions</td></tr>"
+        "<tr><td>Passenger</td><td>Road House</td><td></td><td>Pending</td><td></td>"
+        "<td>stale sibling comment</td></tr></table>"
+    )
+    parsed = parse_email(_dds_email_html(main, sibling_html=sibling))
+    rh = [r for r in parsed.rows if r.brand_category.startswith("Road House")]
+    assert len(rh) == 2
+    assert rh[0].comments == ""
+    assert rh[1].comments == "Order placed 70-80K pending"
+
+
+def test_parse_email_single_marker_strips_prefix_and_parses_dates():
+    rows = (
+        "<tr><td>Passenger</td><td>Filtron</td><td></td><td>Order proposal</td>"
+        "<td>1/ 30.09-20.10 \u2013 10.11</td>"
+        "<td>Price list effective 1 Oct with 10% price increase</td></tr>"
+    )
+    parsed = parse_email(_dds_email_html(rows))
+    filtron = [r for r in parsed.rows if r.brand_category.startswith("Filtron")]
+    assert len(filtron) == 1
+    assert filtron[0].line_number == 1
+    assert filtron[0].shipment_bis == "30.09-20.10 \u2013 10.11"
+    assert filtron[0].etd == "30.09"
+    assert filtron[0].eta == "20.10"
+    assert filtron[0].ready_for_sale == "10.11"
 
 
 def test_parse_email_resolves_table_attached_from_sibling_table():

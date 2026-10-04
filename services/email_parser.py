@@ -109,8 +109,8 @@ _MILESTONE_STATUSES = [
 
 _ARABIC_PATTERN = re.compile(r"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]")
 _HEADER_DIVISIONS = {"division", "brand/ category", "brand/category", ""}
-_ETD_SPLIT_RE = re.compile(r'\b(\d+)\s*/\s*')
-_LINE_PREFIX_RE = re.compile(r'(?:^|\s)(\d{1,2})\s*/\s*')
+_ETD_SPLIT_RE = re.compile(r'(?<![\d.])(\d+)\s*/\s*')
+_LINE_PREFIX_RE = re.compile(r'(?<![\d.])(\d{1,2})\s*/\s*')
 _SHARED_COMMENT_MARK = "**"
 
 
@@ -167,6 +167,7 @@ def _split_etd_eta_ready(text: str) -> tuple[str, str, str]:
     if not text:
         return ("", "", "")
     cleaned = re.sub(r'\s+', ' ', text).strip()
+    cleaned = cleaned.replace("\u2013", "-").replace("\u2014", "-").replace("\u2212", "-")
 
     triplet = _TRIPLET_RE.search(cleaned)
     if triplet:
@@ -250,6 +251,8 @@ def parse_comment_lines(text: str) -> tuple[dict[int, str], str]:
     - "1/ one 2/ two"      -> ({1: "one", 2: "two"}, "")
     - "** applies to all"  -> ({}, "applies to all")
     - plain text           -> ({}, "plain text")
+    - "prose 1/ one"       -> ({1: "prose one"}, "")
+    - "1/ 2/ two"          -> ({2: "two"}, "")   # empty 1/ must not swallow 2/
     """
     cleaned = _normalise_cell(text)
     if not cleaned:
@@ -259,9 +262,11 @@ def parse_comment_lines(text: str) -> tuple[dict[int, str], str]:
         shared = cleaned.replace(_SHARED_COMMENT_MARK, " ")
         return {}, _normalise_cell(shared)
 
-    if not re.match(r'^\d{1,2}\s*/', cleaned):
+    match = _LINE_PREFIX_RE.search(cleaned)
+    if not match:
         return {}, cleaned
 
+    prefix = _normalise_cell(cleaned[: match.start()])
     parts = _LINE_PREFIX_RE.split(cleaned)
     lines: dict[int, str] = {}
     for i in range(1, len(parts) - 1, 2):
@@ -272,6 +277,11 @@ def parse_comment_lines(text: str) -> tuple[dict[int, str], str]:
         body = _normalise_cell(parts[i + 1])
         if body:
             lines[line_no] = body
+
+    if not lines:
+        return {}, prefix
+    if prefix:
+        lines = {no: _normalise_cell(f"{prefix} {body}") for no, body in lines.items()}
     return lines, ""
 
 
@@ -560,7 +570,7 @@ def build_rows_from_table(soup, main_table, parsed: ParsedEmail) -> None:
         if not row.brand_category or _is_header_row(row.division, row.brand_category):
             continue
 
-        fb_lines, fb_shared = fallbacks.get(row.brand_category, ({}, ""))
+        fb_lines, fb_shared = fallbacks.get(row.brand_category, ({}, "")) if table_attached else ({}, "")
         cmt_lines, cmt_shared = parse_comment_lines(comments_raw)
         if table_attached:
             cmt_lines, cmt_shared = {}, ""
@@ -600,14 +610,17 @@ def build_rows_from_table(soup, main_table, parsed: ParsedEmail) -> None:
             for _, note in no_date_entries:
                 parsed.future_etd_notes.append((row.brand_category, note))
         else:
-            etd, eta, ready = _split_etd_eta_ready(etd_raw)
-            row.shipment_bis = etd_raw
+            if date_entries:
+                line_no, etd_entry = date_entries[0]
+                etd, eta, ready = _split_etd_eta_ready(etd_entry)
+                row.shipment_bis = etd_entry
+                row.line_number = line_no
+            else:
+                etd, eta, ready = _split_etd_eta_ready(etd_raw)
+                row.shipment_bis = etd_raw
             row.etd = etd
             row.eta = eta
             row.ready_for_sale = ready
-            single = _split_etd_entries(etd_raw)[0]
-            if single:
-                row.line_number = single[0][0]
             row.comments = resolve_line_comment(
                 row.line_number, cmt_lines, cmt_shared, fb_lines, fb_shared
             )
