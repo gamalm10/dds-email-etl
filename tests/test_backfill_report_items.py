@@ -71,6 +71,21 @@ def test_diff_fields_filtron_case():
     }
 
 
+def test_diff_fields_never_blanks_llm_derived_values():
+    row = ParsedRow(brand_category="Dayco")
+    existing = _existing(
+        milestone="Under Clearance",
+        shipment_bis="10.05\u201321.50- 12.06 - Sale 15 June",
+    )
+    assert diff_fields(existing, row) == {}
+
+
+def test_diff_fields_comments_are_authoritative_when_empty():
+    row = ParsedRow(brand_category="Road House-#1", milestone="order", comments="")
+    existing = _existing(comments_actions="2/Order placed 70-80K pending")
+    assert diff_fields(existing, row) == {"comments_actions": ""}
+
+
 def test_diff_fields_never_emits_unlisted_columns():
     row = ParsedRow(brand_category="X", division="Passenger", availability="yellow")
     assert set(diff_fields({}, row)) <= set(UPDATABLE)

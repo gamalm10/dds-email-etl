@@ -5,7 +5,7 @@ __pycache__/
 .pytest_cache/
 .DS_Store
 .env
-deploy/dds_dump.sql
+deploy/dds_dump*.sql
 deploy/Caddyfile.bak
 pi/node_modules/
 dds-frontend/node_modules/

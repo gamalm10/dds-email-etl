@@ -35,14 +35,25 @@ FIELD_MAP = {
     "language": "language",
 }
 
+# Fields where the parser is authoritative even when it returns empty: a
+# shipment line with no comment text is genuinely empty, so a stored value
+# there is a parser artifact. For the remaining fields an empty parser result
+# means the cell was blank and the stored value came from the LLM, so it is
+# left alone rather than being wiped.
+PARSER_AUTHORITATIVE_WHEN_EMPTY = {"comments"}
+
 
 def diff_fields(existing: dict, row: ParsedRow) -> dict:
     """Return the parser-derived columns that differ from the stored row."""
     changes = {}
     for attr, column in FIELD_MAP.items():
         new = getattr(row, attr) or ""
-        if new != (existing.get(column) or ""):
-            changes[column] = new
+        old = existing.get(column) or ""
+        if new == old:
+            continue
+        if not new and attr not in PARSER_AUTHORITATIVE_WHEN_EMPTY:
+            continue
+        changes[column] = new
     return changes
 
 
