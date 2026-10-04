@@ -974,12 +974,17 @@ class Processor:
             def _s(val, fallback):
                 return val if val is not None and val != "" else (fallback or "")
 
+            def _parser_first(row, attr, llm_val):
+                if row is None:
+                    return llm_val or ""
+                return getattr(row, attr) or ""
+
             item.availability_status = avail
             item.vendor = _s(llm_data.get("vendor"), item.vendor or "")
-            item.milestone = _s(llm_data.get("milestone"), item.milestone)
+            item.milestone = _parser_first(row_data, "milestone", llm_data.get("milestone"))
             item.milestone_ar = _s(llm_data.get("milestone_ar"), item.milestone_ar or "")
-            item.shipment_bis = _s(llm_data.get("shipment_bis"), item.shipment_bis or "")
-            item.comments_actions = _s(llm_data.get("comments_actions"), item.comments_actions)
+            item.shipment_bis = _parser_first(row_data, "shipment_bis", llm_data.get("shipment_bis"))
+            item.comments_actions = _parser_first(row_data, "comments", llm_data.get("comments_actions"))
             item.comments_actions_ar = _s(llm_data.get("comments_actions_ar"), item.comments_actions_ar or "")
             item.quantity_text = _s(llm_data.get("quantity_text"), item.quantity_text or "")
             item.financial_text = _s(llm_data.get("financial_text"), item.financial_text or "")

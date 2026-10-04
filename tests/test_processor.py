@@ -4,6 +4,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from core.models import ProcessingStatus, Report
+from services.email_parser import ParsedEmail, ParsedRow
+from services.extraction import ExtractionResult
 from services.processor import Processor
 
 
@@ -64,3 +66,123 @@ async def test_find_existing_report_filters_by_subject_and_date():
     compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
     assert "dds_reports.subject" in compiled
     assert "dds_reports.report_date" in compiled
+
+
+def _mock_db_with_items(items):
+    result = MagicMock()
+    result.all.return_value = items
+    db = AsyncMock()
+    db.execute.return_value = result
+    return db
+
+
+def _parsed_row(**kwargs):
+    defaults = {"brand_category": "Road House-#1"}
+    defaults.update(kwargs)
+    return ParsedRow(**defaults)
+
+
+@pytest.mark.asyncio
+async def test_update_report_items_parser_wins_over_llm():
+    item = MagicMock()
+    item.vendor = ""
+    item.milestone = ""
+    item.milestone_ar = ""
+    item.shipment_bis = ""
+    item.comments_actions = ""
+    item.comments_actions_ar = ""
+    item.quantity_text = ""
+    item.financial_text = ""
+    item.language = "en"
+    db = _mock_db_with_items([(item, "Road House-#1")])
+
+    extraction = ExtractionResult(
+        items=[{
+            "brand_category": "Road House-#1",
+            "milestone": "Order proposal",
+            "shipment_bis": "1/ 28.09-16.10-01.11",
+            "comments_actions": "2/Order placed 70-80K pending",
+            "vendor": "Road House",
+            "quantity_text": "70-80K",
+        }],
+        tasks=[],
+        insights=[],
+    )
+    parsed = ParsedEmail("", "", "", "", "")
+    parsed.rows = [_parsed_row(milestone="order", shipment_bis="28.09-16.10-01.11", comments="")]
+
+    await Processor(db, AsyncMock())._update_report_items(7, extraction, parsed)
+
+    assert item.milestone == "order"
+    assert item.shipment_bis == "28.09-16.10-01.11"
+    assert item.comments_actions == ""
+
+
+@pytest.mark.asyncio
+async def test_update_report_items_llm_fills_when_no_parsed_row():
+    item = MagicMock()
+    item.vendor = ""
+    item.milestone = ""
+    item.milestone_ar = ""
+    item.shipment_bis = ""
+    item.comments_actions = ""
+    item.comments_actions_ar = ""
+    item.quantity_text = ""
+    item.financial_text = ""
+    item.language = "en"
+    db = _mock_db_with_items([(item, "Road House-#1")])
+
+    extraction = ExtractionResult(
+        items=[{
+            "brand_category": "Road House-#1",
+            "milestone": "Order proposal",
+            "shipment_bis": "1/ 28.09-16.10-01.11",
+            "comments_actions": "2/Order placed 70-80K pending",
+        }],
+        tasks=[],
+        insights=[],
+    )
+    parsed = ParsedEmail("", "", "", "", "")
+    parsed.rows = [_parsed_row(brand_category="Other Brand")]
+
+    await Processor(db, AsyncMock())._update_report_items(7, extraction, parsed)
+
+    assert item.milestone == "Order proposal"
+    assert item.shipment_bis == "1/ 28.09-16.10-01.11"
+    assert item.comments_actions == "2/Order placed 70-80K pending"
+
+
+@pytest.mark.asyncio
+async def test_update_report_items_llm_still_owns_vendor_and_quantity():
+    item = MagicMock()
+    item.vendor = ""
+    item.milestone = ""
+    item.milestone_ar = ""
+    item.shipment_bis = ""
+    item.comments_actions = ""
+    item.comments_actions_ar = ""
+    item.quantity_text = ""
+    item.financial_text = ""
+    item.language = "en"
+    db = _mock_db_with_items([(item, "Road House-#1")])
+
+    extraction = ExtractionResult(
+        items=[{
+            "brand_category": "Road House-#1",
+            "vendor": "Road House",
+            "quantity_text": "70-80K",
+            "financial_text": "198 Euro",
+            "language": "mixed",
+        }],
+        tasks=[],
+        insights=[],
+    )
+    parsed = ParsedEmail("", "", "", "", "")
+    parsed.rows = [_parsed_row()]
+
+    await Processor(db, AsyncMock())._update_report_items(7, extraction, parsed)
+
+    assert item.vendor == "Road House"
+    assert item.quantity_text == "70-80K"
+    assert item.financial_text == "198 Euro"
+    assert item.language == "mixed"

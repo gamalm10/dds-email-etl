@@ -730,19 +730,9 @@ async def trigger_process(
 
 
 def _parse_html_content(html_str: str, subject: str, sender: str) -> "ParsedEmail":
-    from bs4 import BeautifulSoup
-    from services.email_parser import (
-        ParsedEmail, build_rows_from_table, find_main_table,
-    )
+    from services.email_parser import _parse_html_content as _parse
 
-    parsed = ParsedEmail(subject=subject, sender=sender, date="", raw_html=html_str, raw_text="")
-    soup = BeautifulSoup(html_str, "html.parser")
-    main_table = find_main_table(soup)
-    if not main_table:
-        return parsed
-
-    build_rows_from_table(soup, main_table, parsed)
-    return parsed
+    return _parse(html_str, subject, sender)
 
 
 @router.post("/reports/{report_id}/reprocess", response_model=ProcessResponse)

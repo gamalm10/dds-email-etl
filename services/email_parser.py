@@ -630,6 +630,16 @@ def build_rows_from_table(soup, main_table, parsed: ParsedEmail) -> None:
                 parsed.future_etd_notes.append((row.brand_category, note))
 
 
+def _parse_html_content(html_str: str, subject: str, sender: str) -> ParsedEmail:
+    soup = BeautifulSoup(html_str, "html.parser")
+    main_table = find_main_table(soup)
+    if not main_table:
+        return ParsedEmail(subject=subject, sender=sender, date="", raw_html=html_str, raw_text="")
+    parsed = ParsedEmail(subject=subject, sender=sender, date="", raw_html=html_str, raw_text="")
+    build_rows_from_table(soup, main_table, parsed)
+    return parsed
+
+
 def parse_clearance_materials(text: str) -> list[dict]:
     materials = []
     lines = [l.strip() for l in text.split('\n')]
