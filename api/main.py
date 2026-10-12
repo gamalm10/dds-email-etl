@@ -42,6 +42,9 @@ async def lifespan(app: FastAPI):
             async with async_session_factory() as db:
                 proc = Processor(db, sidecar_manager)
                 report = await proc.process_email(raw, subject, received_at)
+                logger.info(
+                    f"Auto-fetch result: {subject!r} -> report #{report.id} status={report.processing_status}"
+                )
                 return report.processing_status == ProcessingStatus.completed
         except Exception as e:
             logger.error(f"Email processing failed: {e}")

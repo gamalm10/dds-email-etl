@@ -720,7 +720,8 @@ async def trigger_process(
     for raw, subject, received_at in raw_emails:
         proc = Processor(db, sidecar)
         try:
-            await proc.process_email(raw, subject, received_at)
+            report = await proc.process_email(raw, subject, received_at)
+            logger.info(f"Fetch result: {subject!r} -> report #{report.id} status={report.processing_status}")
             count += 1
         except Exception as e:
             logger.error(f"Failed to process email {subject}: {e}")
@@ -1442,7 +1443,13 @@ async def get_email_status():
         from aioimaplib import IMAP4_SSL
         client = IMAP4_SSL(host=settings.imap_host, port=settings.imap_port, timeout=10)
         await client.wait_hello_from_server()
-        await client.login(settings.imap_user, settings.imap_password)
+        login = await client.login(settings.imap_user, settings.imap_password)
+        if login.result != "OK":
+            detail = "; ".join(
+                line.decode(errors="ignore") if isinstance(line, (bytes, bytearray)) else str(line)
+                for line in login.lines
+            )
+            raise RuntimeError(detail or "invalid credentials")
         await client.select("INBOX")
         imap_ok = True
         await client.logout()
@@ -1482,6 +1489,20 @@ async def get_email_status():
         },
         "sender_filter": settings.email_sender_filter,
     }
+
+
+@router.get("/settings/auto-fetch-status")
+async def get_auto_fetch_status():
+    from services.auto_fetch_status import status
+
+    return status.snapshot()
+
+
+@router.get("/settings/auto-fetch-logs")
+async def get_auto_fetch_logs(limit: int = Query(100, ge=1, le=200)):
+    from services.auto_fetch_status import recent_logs
+
+    return {"logs": recent_logs(limit)}
 
 
 @router.get("/settings/fetched-emails")

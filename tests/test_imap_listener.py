@@ -1,4 +1,6 @@
+import asyncio
 import email
+import logging
 
 import pytest
 
@@ -142,3 +144,124 @@ def test_extract_raw_email_ignores_status_line_prefix():
 
     assert raw == body
     assert email.message_from_bytes(raw).get("Subject") == "DDS-06.07.2026"
+
+
+class _LoginResponse:
+    def __init__(self, result: str, lines: list[bytes]):
+        self.result = result
+        self.lines = lines
+
+
+class _LoginFailingClient:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def wait_hello_from_server(self):
+        return None
+
+    async def login(self, user, password):
+        return _LoginResponse("NO", [b"[AUTHENTICATIONFAILED] Invalid credentials (Failure)"])
+
+    async def select(self, mailbox="INBOX"):
+        raise AssertionError("select must not run after a failed login")
+
+
+@pytest.mark.asyncio
+async def test_connect_raises_clear_error_on_login_failure(monkeypatch):
+    from services import imap_listener
+
+    monkeypatch.setattr(imap_listener, "IMAP4_SSL", _LoginFailingClient)
+    listener = ImapListener(lambda raw, subject, received_at: None)
+
+    with pytest.raises(RuntimeError, match="Invalid credentials"):
+        await listener._connect()
+
+
+@pytest.mark.asyncio
+async def test_connect_and_listen_polls_until_stopped(monkeypatch):
+    client = FakeImapClient({"1": _dds_email()})
+    processed: list[str] = []
+    listener: ImapListener
+
+    async def on_email(raw, subject, received_at):
+        processed.append(subject)
+        listener._running = False
+        return True
+
+    listener = ImapListener(on_email, poll_interval=0)
+
+    async def fake_connect():
+        return client
+
+    monkeypatch.setattr(listener, "_connect", fake_connect)
+    listener._running = True
+    task = asyncio.create_task(listener._connect_and_listen())
+    await asyncio.wait_for(task, timeout=2)
+
+    assert processed == ["DDS-06.07.2026"]
+    assert client.stored == [("1", "+FLAGS", "\\SEEN")]
+
+
+@pytest.mark.asyncio
+async def test_fetch_new_emails_returns_count_and_logs_info_on_match(caplog):
+    client = FakeImapClient({
+        "1": _dds_email(),
+        "2": _dds_email(subject="Meeting notes"),
+    })
+
+    async def on_email(raw, subject, received_at):
+        return True
+
+    listener = ImapListener(on_email, sender_filter="a-part.com")
+    listener._client = client
+
+    with caplog.at_level(logging.DEBUG, logger="services.imap_listener"):
+        matched = await listener._fetch_new_emails()
+
+    assert matched == 1
+    poll_records = [r for r in caplog.records if "IMAP poll:" in r.getMessage()]
+    assert poll_records
+    assert all(r.levelno == logging.INFO for r in poll_records)
+    assert "1 DDS match" in poll_records[-1].getMessage()
+
+
+@pytest.mark.asyncio
+async def test_fetch_new_emails_logs_debug_when_no_match(caplog):
+    client = FakeImapClient({"1": _dds_email(subject="Meeting notes")})
+    listener = ImapListener(lambda raw, subject, received_at: True)
+    listener._client = client
+
+    with caplog.at_level(logging.DEBUG, logger="services.imap_listener"):
+        matched = await listener._fetch_new_emails()
+
+    assert matched == 0
+    poll_records = [r for r in caplog.records if "IMAP poll:" in r.getMessage()]
+    assert poll_records
+    assert all(r.levelno == logging.DEBUG for r in poll_records)
+
+
+def test_auto_fetch_status_tracks_polls_and_matches():
+    from services import auto_fetch_status as afs
+
+    before = afs.status.snapshot()
+    afs.status.set_running(True)
+    afs.status.record_poll(unseen=3, matched=1, subject="DDS-06.07.2026")
+
+    snap = afs.status.snapshot()
+    assert snap["running"] is True
+    assert snap["poll_count"] == before["poll_count"] + 1
+    assert snap["match_count"] == before["match_count"] + 1
+    assert snap["last_subject"] == "DDS-06.07.2026"
+    assert snap["unseen_count"] == 3
+
+
+def test_memory_log_handler_only_captures_allowlisted_loggers():
+    from services import auto_fetch_status as afs
+
+    afs.install_log_handler()
+    logging.getLogger("services.imap_listener").warning("listener-marker")
+    logging.getLogger("unrelated.logger").warning("other-marker")
+
+    lines = afs.recent_logs(100)
+    assert any("listener-marker" in line for line in lines)
+    assert not any("other-marker" in line for line in lines)

@@ -4,11 +4,12 @@ import {
   Box, Card, CardContent, Typography, Switch, FormControlLabel, Button, Alert, Chip,
   CircularProgress, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   Paper, IconButton, TextField, Tooltip, Checkbox, Snackbar,
+  Accordion, AccordionSummary, AccordionDetails,
 } from '@mui/material';
 import {
   DarkMode, Notifications, Storage, Api, Email, Mail, Refresh, Refresh as Reprocess,
   Replay, Delete, Save, CheckCircle, Error as ErrorIcon, Schedule, HourglassEmpty,
-  CloudUpload, InsertDriveFile,
+  CloudUpload, InsertDriveFile, ExpandMore,
 } from '@mui/icons-material';
 import { useThemeStore } from '@/stores/themeStore';
 import api from '@/lib/api';
@@ -43,6 +44,18 @@ interface FetchedEmail {
   error_message: string | null;
 }
 
+interface AutoFetchStatus {
+  running: boolean;
+  last_poll_at: string | null;
+  last_match_at: string | null;
+  last_subject: string | null;
+  unseen_count: number;
+  poll_count: number;
+  match_count: number;
+  last_error: string | null;
+  reconnect_count: number;
+}
+
 const STATUS_CHIPS: Record<string, { label: string; color: 'success' | 'warning' | 'error' | 'info' | 'default' }> = {
   completed: { label: 'Completed', color: 'success' },
   processing: { label: 'Processing', color: 'info' },
@@ -57,6 +70,9 @@ export default function SettingsPage() {
   const [emailStats, setEmailStats] = useState<EmailStats | null>(null);
   const [emails, setEmails] = useState<FetchedEmail[]>([]);
   const [totalEmails, setTotalEmails] = useState(0);
+  const [autoStatus, setAutoStatus] = useState<AutoFetchStatus | null>(null);
+  const [logs, setLogs] = useState<string[]>([]);
+  const [logsOpen, setLogsOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [fetching, setFetching] = useState(false);
   const [fetchResult, setFetchResult] = useState<string | null>(null);
@@ -107,16 +123,18 @@ export default function SettingsPage() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [statusRes, statsRes, emailsRes] = await Promise.all([
+      const [statusRes, statsRes, emailsRes, autoRes] = await Promise.all([
         api.get('v1/settings/email-status'),
         api.get('v1/settings/email-stats'),
         api.get(`v1/settings/fetched-emails?limit=20&offset=${offset}`),
+        api.get('v1/settings/auto-fetch-status'),
       ]);
       setEmailStatus(statusRes.data);
       setSenderFilter(statusRes.data.sender_filter || '');
       setEmailStats(statsRes.data);
       setEmails(emailsRes.data.emails);
       setTotalEmails(emailsRes.data.total);
+      setAutoStatus(autoRes.data);
     } catch (err) {
       console.error(err);
     } finally {
@@ -124,11 +142,27 @@ export default function SettingsPage() {
     }
   }, [offset]);
 
+  const loadLogs = useCallback(async () => {
+    try {
+      const res = await api.get('v1/settings/auto-fetch-logs?limit=100');
+      setLogs(res.data.logs || []);
+    } catch (err) {
+      console.error(err);
+    }
+  }, []);
+
   useEffect(() => {
     loadData();
     const interval = setInterval(loadData, 30000);
     return () => clearInterval(interval);
   }, [loadData]);
+
+  useEffect(() => {
+    if (!logsOpen) return;
+    loadLogs();
+    const interval = setInterval(loadLogs, 15000);
+    return () => clearInterval(interval);
+  }, [logsOpen, loadLogs]);
 
   const handleFetchEmails = async () => {
     setFetching(true);
@@ -288,6 +322,59 @@ export default function SettingsPage() {
             <Alert severity={fetchResult.includes('No new') ? 'info' : 'success'} sx={{ mt: 2 }}>
               {fetchResult}
             </Alert>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Section 1b: Auto-Fetch */}
+      <Card sx={{ mb: 3 }}>
+        <CardContent>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+            <Typography variant="h6">Auto-Fetch</Typography>
+            <Chip size="small"
+              label={autoStatus?.running ? 'Running' : 'Stopped'}
+              color={autoStatus?.running ? 'success' : 'default'} />
+            {autoStatus?.last_error && (
+              <Chip size="small" variant="outlined" color="error"
+                label={`${autoStatus.reconnect_count} reconnect(s)`} />
+            )}
+          </Box>
+          {autoStatus ? (
+            <>
+              <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 1 }}>
+                <Chip icon={<Schedule />} label={`Polls: ${autoStatus.poll_count}`} variant="outlined" />
+                <Chip icon={<Mail />} label={`DDS matches: ${autoStatus.match_count}`}
+                  color={autoStatus.match_count ? 'success' : 'default'}
+                  variant={autoStatus.match_count ? 'filled' : 'outlined'} />
+                <Chip label={`Unseen now: ${autoStatus.unseen_count}`} variant="outlined" />
+              </Box>
+              <Typography variant="body2" color="text.secondary">
+                Last poll: {autoStatus.last_poll_at ? new Date(autoStatus.last_poll_at).toLocaleString() : 'never'}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Last DDS match: {autoStatus.last_match_at
+                  ? `${new Date(autoStatus.last_match_at).toLocaleString()}${autoStatus.last_subject ? ` — ${autoStatus.last_subject}` : ''}`
+                  : 'none yet'}
+              </Typography>
+              {autoStatus.last_error && (
+                <Alert severity="error" sx={{ mt: 1 }}>Last error: {autoStatus.last_error}</Alert>
+              )}
+              <Accordion expanded={logsOpen} onChange={(_, v) => setLogsOpen(v)} sx={{ mt: 2 }}>
+                <AccordionSummary expandIcon={<ExpandMore />}>
+                  <Typography variant="body2">View log ({logs.length})</Typography>
+                </AccordionSummary>
+                <AccordionDetails>
+                  <Box component="pre" sx={{
+                    m: 0, maxHeight: 320, overflow: 'auto', fontSize: 12,
+                    fontFamily: 'monospace', whiteSpace: 'pre-wrap',
+                  }}>
+                    {logs.length ? logs.join('\n') : 'No log lines yet.'}
+                  </Box>
+                </AccordionDetails>
+              </Accordion>
+            </>
+          ) : (
+            <Typography variant="body2" color="text.secondary">No auto-fetch data yet.</Typography>
           )}
         </CardContent>
       </Card>

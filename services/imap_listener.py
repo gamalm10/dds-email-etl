@@ -9,6 +9,7 @@ from email.utils import parsedate_to_datetime
 from aioimaplib import IMAP4_SSL
 
 from config.settings import get_settings
+from services.auto_fetch_status import status
 
 logger = logging.getLogger(__name__)
 
@@ -43,56 +44,71 @@ def parse_dds_date(subject: str) -> date | None:
 
 
 class ImapListener:
-    def __init__(self, on_email: OnEmailCallback, sender_filter: str = ""):
+    def __init__(self, on_email: OnEmailCallback, sender_filter: str = "", poll_interval: int = 60):
         self.on_email = on_email
         self.sender_filter = sender_filter
+        self.poll_interval = poll_interval
         self._client: IMAP4_SSL | None = None
         self._running = False
 
     async def start(self):
         self._running = True
-        while self._running:
-            try:
-                await self._connect_and_listen()
-            except Exception as e:
-                logger.error(f"IMAP connection error: {e}, reconnecting in 30s")
-                await asyncio.sleep(30)
+        status.set_running(True)
+        try:
+            while self._running:
+                try:
+                    await self._connect_and_listen()
+                except Exception as e:
+                    status.record_error(str(e))
+                    logger.error(f"IMAP connection error: {e}, reconnecting in 30s")
+                    await asyncio.sleep(30)
+        finally:
+            status.set_running(False)
 
     async def stop(self):
         self._running = False
+        status.set_running(False)
         if self._client:
-            self._client.close()
+            try:
+                await self._client.logout()
+            except Exception as e:
+                logger.debug(f"Error closing IMAP connection: {e}")
+            self._client = None
+
+    async def _connect(self) -> IMAP4_SSL:
+        settings = get_settings()
+        client = IMAP4_SSL(host=settings.imap_host, port=settings.imap_port)
+        await client.wait_hello_from_server()
+        login = await client.login(settings.imap_user, settings.imap_password)
+        if login.result != "OK":
+            detail = "; ".join(
+                line.decode(errors="ignore") if isinstance(line, (bytes, bytearray)) else str(line)
+                for line in login.lines
+            )
+            raise RuntimeError(
+                f"IMAP login failed for {settings.imap_user}: {detail or 'invalid credentials'}"
+            )
+        selected = await client.select("INBOX")
+        if selected.result != "OK":
+            raise RuntimeError(f"IMAP SELECT INBOX failed: {selected.lines}")
+        return client
 
     async def _connect_and_listen(self):
-        settings = get_settings()
-        self._client = IMAP4_SSL(host=settings.imap_host, port=settings.imap_port)
-        await self._client.wait_hello_from_server()
-        await self._client.login(settings.imap_user, settings.imap_password)
-        await self._client.select("INBOX")
-        logger.info("IMAP connected, waiting for IDLE notifications")
+        self._client = await self._connect()
+        logger.info(f"IMAP connected, polling every {self.poll_interval}s")
 
         while self._running:
-            await self._client.idle()
-            try:
-                result = await self._client.wait_for_update(timeout=60)
-                if result and self._running:
-                    await self._fetch_new_emails()
-            except TimeoutError:
-                continue
-            finally:
-                await self._client.idle_done()
+            await self._fetch_new_emails()
+            await asyncio.sleep(self.poll_interval)
 
     async def fetch_unprocessed(self) -> list[tuple[bytes, str, datetime]]:
-        settings = get_settings()
         if not self._client:
-            self._client = IMAP4_SSL(host=settings.imap_host, port=settings.imap_port)
-            await self._client.wait_hello_from_server()
-            await self._client.login(settings.imap_user, settings.imap_password)
-            await self._client.select("INBOX")
+            self._client = await self._connect()
 
         result = await self._client.search("UNSEEN")
         uids = result.lines[0].decode().split()
         results = []
+        last_subject: str | None = None
 
         for uid in uids:
             msg_result = await self._client.fetch(uid, "(BODY.PEEK[])")
@@ -110,16 +126,23 @@ class ImapListener:
 
             msg_date = self._extract_date(raw_email)
             results.append((raw_email, subject, msg_date))
+            last_subject = subject
 
             await self._client.store(uid, "+FLAGS", "\\SEEN")
 
+        matched = len(results)
+        if matched:
+            logger.info(f"IMAP fetch: {len(uids)} unseen, {matched} DDS match(es)")
+        else:
+            logger.debug(f"IMAP fetch: {len(uids)} unseen, 0 DDS match(es)")
+        status.record_poll(len(uids), matched, last_subject)
         return results
 
-    async def _fetch_new_emails(self):
+    async def _fetch_new_emails(self) -> int:
         result = await self._client.search("UNSEEN")
         uids = result.lines[0].decode().split()
-        if not uids:
-            return
+        matched = 0
+        last_subject: str | None = None
 
         for uid in uids:
             msg_result = await self._client.fetch(uid, "(BODY.PEEK[])")
@@ -135,6 +158,10 @@ class ImapListener:
                     logger.debug(f"Skipping email from {sender} (filter: {self.sender_filter})")
                     continue
 
+            matched += 1
+            last_subject = subject
+            logger.info(f"Auto-fetching DDS email uid={uid} subject={subject!r}")
+
             msg_date = self._extract_date(raw_email)
             processed = await self.on_email(raw_email, subject, msg_date)
             if processed:
@@ -142,6 +169,13 @@ class ImapListener:
                     await self._client.store(uid, "+FLAGS", "\\SEEN")
                 except Exception as e:
                     logger.warning(f"Failed to mark email {uid} as seen: {e}")
+
+        if matched:
+            logger.info(f"IMAP poll: {len(uids)} unseen, {matched} DDS match(es)")
+        else:
+            logger.debug(f"IMAP poll: {len(uids)} unseen, 0 DDS match(es)")
+        status.record_poll(len(uids), matched, last_subject)
+        return matched
 
     def _extract_subject(self, raw: bytes) -> str | None:
         msg = email.message_from_bytes(raw)
