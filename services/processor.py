@@ -133,7 +133,8 @@ class Processor:
                 recovered.append(report.id)
             except Exception as e:
                 logger.exception(f"Reconciliation failed for report {report.id}")
-                await self._record_failure(report.id, str(e), step="enrich")
+                await self.db.rollback()
+                await self._record_failure(report, str(e), step="enrich")
         return recovered
 
     def _parse_stored(self, report: Report) -> ParsedEmail | None:
@@ -219,7 +220,7 @@ class Processor:
             await self.db.rollback()
             report.processing_status = ProcessingStatus.failed
             report.error_message = str(e)
-            await self._record_failure(report.id, str(e))
+            await self._record_failure(report, str(e))
             return report
 
         if report.processing_status == ProcessingStatus.completed:
@@ -230,19 +231,38 @@ class Processor:
 
         return report
 
-    async def _record_failure(self, report_id: int, message: str, step: str = "pipeline") -> None:
+    async def _record_failure(self, report: Report, message: str, step: str = "pipeline") -> None:
         """Persist the failed status on a fresh session.
 
         The pipeline's own session may be the reason the pipeline failed
         (dead connection, rolled-back transaction), so the failure state
-        must never depend on it to be recordable.
+        must never depend on it to be recordable. If the pipeline died
+        before the report row was ever committed, the report is re-inserted
+        here so the email is not silently lost.
         """
         try:
             async with async_session_factory() as session:
-                report = await session.get(Report, report_id)
-                if report:
-                    report.processing_status = ProcessingStatus.failed
-                    report.error_message = message
+                persisted = await session.get(Report, report.id)
+                if persisted is None:
+                    persisted = Report(
+                        subject=report.subject,
+                        report_date=report.report_date,
+                        sender=report.sender,
+                        recipients=report.recipients,
+                        cc_list=report.cc_list,
+                        received_at=report.received_at,
+                        raw_html=report.raw_html,
+                        raw_text=report.raw_text,
+                        processing_status=ProcessingStatus.failed,
+                        error_message=message,
+                    )
+                    session.add(persisted)
+                    await session.flush()
+                else:
+                    persisted.processing_status = ProcessingStatus.failed
+                    persisted.error_message = message
+
+                report_id = persisted.id
                 fetched = (
                     await session.execute(
                         select(FetchedEmail)
@@ -251,13 +271,23 @@ class Processor:
                         .limit(1)
                     )
                 ).scalar_one_or_none()
-                if fetched:
+                if fetched is None:
+                    fetched = FetchedEmail(
+                        subject=report.subject,
+                        sender=report.sender,
+                        received_at=report.received_at,
+                        processing_status="failed",
+                        report_id=report_id,
+                        error_message=message[:500],
+                    )
+                else:
                     fetched.processing_status = "failed"
                     fetched.error_message = message[:500]
+                session.add(fetched)
                 session.add(ProcessingLog(report_id=report_id, step=step, status="failed", message=message))
                 await session.commit()
         except Exception:
-            logger.exception(f"Could not persist failure state for report {report_id}")
+            logger.exception(f"Could not persist failure state for report {report.id}")
 
     async def rebuild_report(self, report_id: int, parsed_email: ParsedEmail) -> Report:
         report = await self.db.get(Report, report_id)
@@ -1080,7 +1110,7 @@ class Processor:
             await self.db.rollback()
             report.processing_status = ProcessingStatus.failed
             report.error_message = str(e)
-            await self._record_failure(report_id, str(e), step="enrich")
+            await self._record_failure(report, str(e), step="enrich")
 
     async def _update_report_items(self, report_id: int, extraction: ExtractionResult, parsed: ParsedEmail) -> None:
         llm_items = {item["brand_category"]: item for item in extraction.items if item.get("brand_category")}

@@ -97,6 +97,7 @@ class FakeFreshSession:
         self.fetched = fetched
         self.added = []
         self.committed = False
+        self.flushed = 0
 
     async def __aenter__(self):
         return self
@@ -115,6 +116,12 @@ class FakeFreshSession:
     def add(self, obj):
         self.added.append(obj)
 
+    async def flush(self):
+        self.flushed += 1
+        for obj in self.added:
+            if isinstance(obj, Report) and obj.id is None:
+                obj.id = 99
+
     async def commit(self):
         self.committed = True
 
@@ -126,7 +133,9 @@ async def test_record_failure_persists_status_and_log_on_fresh_session(monkeypat
     fresh = FakeFreshSession(report=report, fetched=fetched)
     monkeypatch.setattr(processor_module, "async_session_factory", lambda: fresh)
 
-    await Processor(AsyncMock(), AsyncMock())._record_failure(15, "connection dead")
+    await Processor(AsyncMock(), AsyncMock())._record_failure(
+        _stale_report(ProcessingStatus.processing), "connection dead"
+    )
 
     assert report.processing_status == ProcessingStatus.failed
     assert report.error_message == "connection dead"
@@ -146,7 +155,9 @@ async def test_record_failure_swallows_fresh_session_error(monkeypatch):
 
     monkeypatch.setattr(processor_module, "async_session_factory", broken_factory)
 
-    await Processor(AsyncMock(), AsyncMock())._record_failure(15, "boom")
+    await Processor(AsyncMock(), AsyncMock())._record_failure(
+        _stale_report(ProcessingStatus.processing), "boom"
+    )
 
 
 @pytest.mark.asyncio
@@ -295,6 +306,48 @@ async def test_reconcile_skips_capped_and_htmlless_reports():
 
     assert recovered == []
     proc.rebuild_report.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_record_failure_reinserts_uncommitted_report(monkeypatch):
+    report = Report(
+        id=15,
+        subject="DDS-06.07.2026",
+        report_date=date(2026, 7, 6),
+        received_at=datetime(2026, 7, 6, 10, 0, tzinfo=UTC),
+        raw_html="<html><body>status</body></html>",
+        processing_status=ProcessingStatus.processing,
+    )
+    fresh = FakeFreshSession(report=None, fetched=None)
+    monkeypatch.setattr(processor_module, "async_session_factory", lambda: fresh)
+
+    await Processor(AsyncMock(), AsyncMock())._record_failure(report, "connection dead")
+
+    inserted = next(o for o in fresh.added if isinstance(o, Report))
+    assert inserted.processing_status == ProcessingStatus.failed
+    assert inserted.error_message == "connection dead"
+    assert inserted.id == 99
+    assert inserted.subject == "DDS-06.07.2026"
+    assert inserted.raw_html == report.raw_html
+    log = next(o for o in fresh.added if isinstance(o, ProcessingLog))
+    assert log.report_id == 99
+    assert log.status == "failed"
+    assert fresh.committed
+
+
+@pytest.mark.asyncio
+async def test_record_failure_creates_fetched_email_when_missing(monkeypatch):
+    report = _stale_report(ProcessingStatus.processing)
+    fresh = FakeFreshSession(report=report, fetched=None)
+    monkeypatch.setattr(processor_module, "async_session_factory", lambda: fresh)
+
+    await Processor(AsyncMock(), AsyncMock())._record_failure(report, "boom")
+
+    fetched = next(o for o in fresh.added if isinstance(o, FetchedEmail))
+    assert fetched.processing_status == "failed"
+    assert fetched.report_id == 7
+    assert fetched.subject == "DDS-06.07.2026"
+    assert fresh.committed
 
 
 def _mock_db_with_items(items):

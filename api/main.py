@@ -17,15 +17,18 @@ from config.logging import setup_logging
 from config.settings import get_settings
 from core.database import async_session_factory, engine
 from services.imap_listener import ImapListener
-from services.processor import Processor
+from services.processor import STALE_PROCESSING_MINUTES, Processor
 from services.sidecar_manager import SidecarManager
 
 setup_logging()
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+RECONCILE_INTERVAL_SECONDS = STALE_PROCESSING_MINUTES * 60
+
 sidecar_manager = SidecarManager()
 imap_listener: ImapListener | None = None
+_background_tasks: list[asyncio.Task] = []
 
 
 @asynccontextmanager
@@ -54,21 +57,34 @@ async def lifespan(app: FastAPI):
 
     imap_listener = ImapListener(on_email, sender_filter=settings.email_sender_filter)
 
-    async def reconcile_then_listen():
+    async def reconcile_stuck():
         try:
             async with async_session_factory() as db:
                 proc = Processor(db, sidecar_manager)
                 recovered = await proc.reconcile_stuck_reports()
                 if recovered:
-                    logger.info(f"Reconciled stuck reports on startup: {recovered}")
+                    logger.info(f"Reconciled stuck reports: {recovered}")
         except Exception:
-            logger.exception("Startup reconciliation failed")
-        await imap_listener.start()
+            logger.exception("Reconciliation failed")
 
-    asyncio.create_task(reconcile_then_listen())
+    async def reconcile_then_listen():
+        # Reconcile before the listener starts so the two never race on the
+        # same stuck report during startup.
+        await reconcile_stuck()
+        asyncio.create_task(imap_listener.start())
+        # Keep a driver alive after startup: without it, a report that fails
+        # or stalls mid-run stays stuck until the next service restart.
+        while True:
+            await asyncio.sleep(RECONCILE_INTERVAL_SECONDS)
+            await reconcile_stuck()
+
+    reconcile_task = asyncio.create_task(reconcile_then_listen())
+    _background_tasks.append(reconcile_task)
 
     yield
 
+    for task in _background_tasks:
+        task.cancel()
     if imap_listener:
         await imap_listener.stop()
     await sidecar_manager.stop()
