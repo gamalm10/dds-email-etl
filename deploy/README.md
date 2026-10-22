@@ -27,8 +27,29 @@ Networks `proxy` and `backend` are external Swarm overlays shared with the other
 ## Build & push (build on the server — the Mac has no route to Docker Hub)
 
 The Mac can only reach the internal registry, so images are built on the server
-through Portainer's Docker API (`POST /api/endpoints/3/docker/build` with a tar
-context) and pushed with `X-Registry-Auth` (URL-safe base64). Build contexts:
+and pushed to it in one step, using a throwaway `docker:cli` builder container
+with the host Docker socket mounted:
+
+1. Tar the build context locally, mirroring `.dockerignore`:
+   `tar -czf ctx.tar.gz --exclude='.git' --exclude='.venv' --exclude='emails'
+   --exclude='docs' --exclude='tests' --exclude='__pycache__' --exclude='.env'
+   --exclude='deploy/dds_dump.sql' --exclude='dds-frontend/node_modules' .`
+2. Via the Portainer Docker API (endpoint 3): `POST /containers/create`
+   (`docker:cli`, `Cmd` = extract context + `docker build` + `docker push`,
+   `Binds: ["/var/run/docker.sock:/var/run/docker.sock"]`).
+3. Upload files into it with `PUT /containers/{id}/archive?path=/` — the body is
+   a tar whose single entry is the payload file (`ctx.tar`, `config.json` with
+   the registry auth block).
+4. `POST /containers/{id}/start`, poll `GET /containers/{id}/json` until it
+   exits, read build output via `GET /containers/{id}/logs`, then delete the
+   builder.
+
+Do not use `POST /endpoints/{id}/docker/build` directly: it fails with
+`Unable to proxy the request via the Docker socket ... broken pipe` on this
+setup, and hijacked exec streams return no output, so the archive-upload +
+logs-read pattern above is the reliable path.
+
+Build contexts:
 
 - API: repo root, `dockerfile=Dockerfile`
 - Frontend: `dds-frontend/`, `dockerfile=Dockerfile`
@@ -38,6 +59,13 @@ The registry caps the **compressed blob** size (a 200 MB incompressible layer is
 rejected, 300 MB of zeros is fine). The API image is therefore split so no single
 layer is too large (apt bootstrap and nodejs in separate layers; the sidecar agent
 is installed once, globally, not twice).
+
+Releases bump the image tag in the stack file. Bumping the shared `DDS_TAG`
+stack env var redeploys all three services, so for a single-service change pin
+that service's `image:` line to the new tag instead (as done for
+`dds-api:v4`), then force the swarm service update
+(`POST /services/{id}/update` with the bumped image) if Portainer's stack
+update does not roll it.
 
 ## Stack
 
