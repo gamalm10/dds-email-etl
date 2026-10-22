@@ -16,7 +16,6 @@ from api.routes_vendors import router as vendors_router
 from config.logging import setup_logging
 from config.settings import get_settings
 from core.database import async_session_factory, engine
-from core.models import ProcessingStatus
 from services.imap_listener import ImapListener
 from services.processor import Processor
 from services.sidecar_manager import SidecarManager
@@ -45,13 +44,28 @@ async def lifespan(app: FastAPI):
                 logger.info(
                     f"Auto-fetch result: {subject!r} -> report #{report.id} status={report.processing_status}"
                 )
-                return report.processing_status == ProcessingStatus.completed
+                # Marking the email seen once a report exists (any status)
+                # stops the endless re-fetch loop; retries are driven off the
+                # report row by the stale-reprocess logic.
+                return report is not None
         except Exception as e:
             logger.error(f"Email processing failed: {e}")
             return False
 
     imap_listener = ImapListener(on_email, sender_filter=settings.email_sender_filter)
-    asyncio.create_task(imap_listener.start())
+
+    async def reconcile_then_listen():
+        try:
+            async with async_session_factory() as db:
+                proc = Processor(db, sidecar_manager)
+                recovered = await proc.reconcile_stuck_reports()
+                if recovered:
+                    logger.info(f"Reconciled stuck reports on startup: {recovered}")
+        except Exception:
+            logger.exception("Startup reconciliation failed")
+        await imap_listener.start()
+
+    asyncio.create_task(reconcile_then_listen())
 
     yield
 

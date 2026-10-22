@@ -1,11 +1,12 @@
 import json
 import logging
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.database import async_session_factory
 from core.models import (
     AnomalyLog,
     AvailabilityStatus,
@@ -39,6 +40,15 @@ from services.sidecar_manager import SidecarManager
 
 logger = logging.getLogger(__name__)
 
+STALE_PROCESSING_MINUTES = 15
+MAX_AUTO_RETRIES = 3
+
+FAILURE_STEPS = ("pipeline", "enrich")
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)  # noqa: UP017
+
 
 class ProcessingError(Exception):
     pass
@@ -62,6 +72,80 @@ class Processor:
             )
         ).scalar_one_or_none()
 
+    async def _needs_reprocess(self, report: Report) -> bool:
+        if report.processing_status == ProcessingStatus.completed:
+            return False
+        if await self._failed_attempt_count(report.id) >= MAX_AUTO_RETRIES:
+            return False
+        if report.processing_status == ProcessingStatus.failed:
+            return True
+        last_activity = await self._last_activity_at(report)
+        return (_utcnow() - last_activity) > timedelta(minutes=STALE_PROCESSING_MINUTES)
+
+    async def _failed_attempt_count(self, report_id: int) -> int:
+        result = await self.db.execute(
+            select(func.count())
+            .select_from(ProcessingLog)
+            .where(
+                ProcessingLog.report_id == report_id,
+                ProcessingLog.status == "failed",
+                ProcessingLog.step.in_(FAILURE_STEPS),
+            )
+        )
+        return int(result.scalar_one() or 0)
+
+    async def _last_activity_at(self, report: Report) -> datetime:
+        row = (
+            await self.db.execute(
+                select(ProcessingLog.created_at)
+                .where(ProcessingLog.report_id == report.id)
+                .order_by(ProcessingLog.created_at.desc(), ProcessingLog.id.desc())
+                .limit(1)
+            )
+        ).first()
+        if row and row[0]:
+            return row[0]
+        return report.created_at or _utcnow()
+
+    async def reconcile_stuck_reports(self) -> list[int]:
+        """Reprocess reports left in processing (stale) or failed, bounded by the retry cap."""
+        stuck = (
+            await self.db.execute(
+                select(Report)
+                .where(
+                    Report.processing_status.in_(
+                        [ProcessingStatus.processing, ProcessingStatus.failed]
+                    )
+                )
+                .order_by(Report.id)
+            )
+        ).scalars().all()
+
+        recovered: list[int] = []
+        for report in stuck:
+            if not await self._needs_reprocess(report):
+                continue
+            parsed = self._parse_stored(report)
+            if not parsed:
+                continue
+            try:
+                await self.rebuild_report(report.id, parsed)
+                recovered.append(report.id)
+            except Exception as e:
+                logger.exception(f"Reconciliation failed for report {report.id}")
+                await self._record_failure(report.id, str(e), step="enrich")
+        return recovered
+
+    def _parse_stored(self, report: Report) -> ParsedEmail | None:
+        if not report.raw_html:
+            return None
+        try:
+            from services.email_parser import _parse_html_content
+            return _parse_html_content(report.raw_html, report.subject, report.sender or "")
+        except Exception:
+            logger.exception(f"Could not re-parse stored HTML for report {report.id}")
+            return None
+
     async def process_email(self, raw_bytes: bytes, subject: str, received_at: datetime) -> Report:
         parsed = parse_email(raw_bytes)
 
@@ -71,6 +155,12 @@ class Processor:
 
         existing = await self._find_existing_report(subject, report_date)
         if existing:
+            if await self._needs_reprocess(existing):
+                logger.info(
+                    f"Reprocessing stale {existing.processing_status.value} report "
+                    f"#{existing.id}: {subject}"
+                )
+                return await self.rebuild_report(existing.id, parsed)
             logger.info(f"Skipping duplicate report #{existing.id}: {subject}")
             return existing
 
@@ -122,16 +212,15 @@ class Processor:
 
             report.processing_status = ProcessingStatus.completed
             fetched.processing_status = "completed"
+            await self.db.commit()
 
         except Exception as e:
             logger.exception(f"Processing failed for report {report.id}")
+            await self.db.rollback()
             report.processing_status = ProcessingStatus.failed
             report.error_message = str(e)
-            fetched.processing_status = "failed"
-            fetched.error_message = str(e)[:500]
-            await self._log(report.id, "pipeline", "failed", str(e))
-
-        await self.db.commit()
+            await self._record_failure(report.id, str(e))
+            return report
 
         if report.processing_status == ProcessingStatus.completed:
             try:
@@ -141,16 +230,51 @@ class Processor:
 
         return report
 
+    async def _record_failure(self, report_id: int, message: str, step: str = "pipeline") -> None:
+        """Persist the failed status on a fresh session.
+
+        The pipeline's own session may be the reason the pipeline failed
+        (dead connection, rolled-back transaction), so the failure state
+        must never depend on it to be recordable.
+        """
+        try:
+            async with async_session_factory() as session:
+                report = await session.get(Report, report_id)
+                if report:
+                    report.processing_status = ProcessingStatus.failed
+                    report.error_message = message
+                fetched = (
+                    await session.execute(
+                        select(FetchedEmail)
+                        .where(FetchedEmail.report_id == report_id)
+                        .order_by(FetchedEmail.fetched_at.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if fetched:
+                    fetched.processing_status = "failed"
+                    fetched.error_message = message[:500]
+                session.add(ProcessingLog(report_id=report_id, step=step, status="failed", message=message))
+                await session.commit()
+        except Exception:
+            logger.exception(f"Could not persist failure state for report {report_id}")
+
     async def rebuild_report(self, report_id: int, parsed_email: ParsedEmail) -> Report:
         report = await self.db.get(Report, report_id)
         if not report:
             raise ProcessingError(f"Report {report_id} not found")
 
-        await self.db.execute(text("UPDATE dds_insights SET matched_anomaly_id = NULL WHERE matched_anomaly_id IS NOT NULL"))
+        await self.db.execute(
+            text(
+                "UPDATE dds_insights SET matched_anomaly_id = NULL "
+                "WHERE matched_anomaly_id IN (SELECT id FROM dds_insights WHERE report_id = :rid)"
+            ),
+            {"rid": report_id},
+        )
         await self.db.execute(text("DELETE FROM dds_anomaly_log WHERE matched_insight_id IN (SELECT id FROM dds_insights WHERE report_id = :rid)"), {"rid": report_id})
         await self.db.execute(text("DELETE FROM dds_anomaly_log WHERE source_report_id = :rid OR matched_report_id = :rid"), {"rid": report_id})
         await self.db.execute(text("UPDATE dds_tasks SET first_seen_report_id = NULL, last_seen_report_id = NULL, resolved_at_report_id = NULL WHERE first_seen_report_id = :rid OR last_seen_report_id = :rid OR resolved_at_report_id = :rid"), {"rid": report_id})
-        for table in ["dds_clearance_materials", "dds_priority_actions", "dds_thread_summaries", "dds_email_images", "dds_signatures", "dds_email_threads", "dds_ordering_rules", "dds_insights", "dds_processing_log", "dds_risk_language", "dds_payment_terms", "dds_negotiations", "dds_lead_times", "dds_percentage_metrics", "dds_status_history"]:
+        for table in ["dds_clearance_materials", "dds_priority_actions", "dds_thread_summaries", "dds_email_images", "dds_signatures", "dds_email_threads", "dds_ordering_rules", "dds_insights", "dds_risk_language", "dds_payment_terms", "dds_negotiations", "dds_lead_times", "dds_percentage_metrics", "dds_status_history"]:
             await self.db.execute(text(f"DELETE FROM {table} WHERE report_id = :rid"), {"rid": report_id})
         await self.db.execute(text("DELETE FROM dds_report_items WHERE report_id = :rid"), {"rid": report_id})
         await self.db.flush()
@@ -160,6 +284,7 @@ class Processor:
         if parsed_email.raw_text:
             report.raw_text = parsed_email.raw_text
         report.processing_status = ProcessingStatus.processing
+        report.error_message = None
 
         for row in parsed_email.rows:
             if not row.brand_category:
@@ -948,14 +1073,14 @@ class Processor:
             await self._store_enhanced_extractions(report_id, text_body, extraction)
 
             report.processing_status = ProcessingStatus.completed
+            await self.db.commit()
 
         except Exception as e:
             logger.exception(f"Enrichment failed for report {report_id}")
+            await self.db.rollback()
             report.processing_status = ProcessingStatus.failed
             report.error_message = str(e)
-            await self._log(report_id, "enrich", "failed", str(e))
-
-        await self.db.commit()
+            await self._record_failure(report_id, str(e), step="enrich")
 
     async def _update_report_items(self, report_id: int, extraction: ExtractionResult, parsed: ParsedEmail) -> None:
         llm_items = {item["brand_category"]: item for item in extraction.items if item.get("brand_category")}
